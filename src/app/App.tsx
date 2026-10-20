@@ -5,9 +5,9 @@ import { LocalSaveStatus } from '../features/workout/LocalSaveStatus'
 import { ExerciseCard } from '../features/workout/ExerciseCard'
 import { Button } from '../shared/Button'
 
-interface Props { repository: WorkoutRepository }
+interface Props { repository: WorkoutRepository; authenticated?: boolean; onLocalWrite?: () => void; onDraftStateChange?: (unsaved: boolean) => void }
 
-export function App({ repository }: Props) {
+export function App({ repository, authenticated = false, onLocalWrite, onDraftStateChange }: Props) {
   const [sets, setSets] = useState<WorkoutSet[]>([])
   const [title, setTitle] = useState('')
   const [loading, setLoading] = useState(true)
@@ -50,6 +50,7 @@ export function App({ repository }: Props) {
           await repository.apply(commands.current[0])
           commands.current.shift()
           setPending(commands.current.length)
+          onLocalWrite?.()
         } catch (cause) {
           blocked.current = true
           setError(message(cause))
@@ -154,14 +155,16 @@ export function App({ repository }: Props) {
 
   const invalid = title.trim().length === 0 || sets.some((set) => !validSet(set))
 
+  useEffect(() => { onDraftStateChange?.(pending > 0 || invalid) }, [pending, invalid, onDraftStateChange])
+
   return <main className="app-shell">
     <header className="page-header">
       <div className="header-kicker"><span className="live-dot" aria-hidden="true" /> АКТИВНАЯ ТРЕНИРОВКА</div>
       <h1>Тренировка</h1><p className="date-line">{date}</p>
     </header>
-    <div className="dev-banner" role="note">Режим разработки — нет аккаунта и облачной копии</div>
+    {!authenticated && <div className="dev-banner" role="note">Режим разработки — нет аккаунта и облачной копии</div>}
     {loading ? <p role="status">Загружаем локальную тренировку…</p> : loadError ? <div role="alert" className="load-error"><p>Не удалось открыть локальные данные: {loadError}</p><Button onClick={() => window.location.reload()}>Повторить загрузку</Button></div> : <>
-      <LocalSaveStatus pending={pending} error={error} invalid={invalid} onRetry={retry} />
+      {authenticated ? error ? <div role="alert" className="load-error">Локальная запись не удалась: {error} <Button onClick={retry}>Повторить</Button></div> : invalid ? <div role="alert" className="local-status local-status--error">Исправьте пустые или некорректные значения: они ещё не сохранены.</div> : pending > 0 ? <div role="status" className="local-status">Сохраняем на устройстве…</div> : null : <LocalSaveStatus pending={pending} error={error} invalid={invalid} onRetry={retry} />}
       <section className="workout-title-card" aria-label="Название тренировки">
         <label htmlFor="workout-title">НАЗВАНИЕ ТРЕНИРОВКИ</label>
         <input id="workout-title" value={title} onChange={(event) => {
@@ -172,7 +175,7 @@ export function App({ repository }: Props) {
       </section>
       <ExerciseCard sets={sets} newestId={newestId} onChange={handleChange} onAdd={handleAdd} onDelete={handleDelete} />
       {removed && <div className="undo-panel" role="status"><span>Подход удалён</span><Button variant="quiet" onClick={handleUndo}>Отменить</Button></div>}
-      <section className="backup-panel" aria-label="Резервная копия">
+      {!authenticated && <section className="backup-panel" aria-label="Резервная копия">
         <h2>Локальная копия</h2><p>Экспортируйте тестовые данные в JSON. Импорт полностью заменит текущую локальную тренировку.</p>
         <div className="backup-actions">
           <Button variant="quiet" onClick={handleExport}>Экспорт JSON</Button>
@@ -180,8 +183,8 @@ export function App({ repository }: Props) {
         </div>
         <input ref={fileRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Выбрать файл JSON для импорта" onChange={(event) => void handleImport(event.target.files?.[0])} />
         {notice && <p role="status" className="backup-notice">{notice}</p>}
-      </section>
-      <p className="footer-note">Данные хранятся только в этом браузере. Очистка хранилища удалит их.</p>
+      </section>}
+      <p className="footer-note">{authenticated ? 'Локальные данные этого аккаунта хранятся на устройстве. Облачная синхронизация пока не подтверждена.' : 'Данные хранятся только в этом браузере. Очистка хранилища удалит их.'}</p>
     </>}
   </main>
 }
