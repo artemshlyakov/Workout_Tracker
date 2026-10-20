@@ -6,7 +6,7 @@ The SQL fixture is a narrower, reproducible **local** check of the migration and
 
 ```bash
 psql -v ON_ERROR_STOP=1 -f supabase/tests/local-bootstrap.sql
-psql -v ON_ERROR_STOP=1 --single-transaction -f supabase/migrations/20261020124057_private_workout_sync.sql
+psql -v ON_ERROR_STOP=1 --single-transaction -f supabase/migrations/20261020132939_private_workout_sync.sql
 psql -v ON_ERROR_STOP=1 -f supabase/tests/security.local.sql
 ```
 

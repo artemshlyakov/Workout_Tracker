@@ -1,6 +1,6 @@
 # Data model — local-first + Supabase v0.4
 
-**Status:** the Plan 003A migration in `supabase/migrations/20261020124057_private_workout_sync.sql` was applied to project `snnlibzckwpmbkersdnm` via Supabase MCP; the cloud history version differs from the local filename (details: `supabase/migrations/README.md`). Auth and sync remain future work. The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
+**Status:** the Plan 003A migration in `supabase/migrations/20261020132939_private_workout_sync.sql` was applied to project `snnlibzckwpmbkersdnm` via Supabase MCP; the local version now matches cloud history (details: `supabase/migrations/README.md`). Auth and sync remain future work. The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
 
 ## Logical graph
 ```mermaid
