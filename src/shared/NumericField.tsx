@@ -26,7 +26,7 @@ export function NumericField({ id, label, value, onChange, invalid, kind, inputR
       placeholder={kind === 'weight' ? '0,0' : '0'}
     />
     {invalid && <span className="field-error" id={`${id}-error`} role="alert">
-      {kind === 'weight' ? 'Вес: 0 или больше, до 2 знаков' : 'Повторы: целое число от 0'}
+      {kind === 'weight' ? 'Вес: от 0 до 2000, до 2 знаков' : 'Повторы: целое число от 1 до 1000'}
     </span>}
   </div>
 }

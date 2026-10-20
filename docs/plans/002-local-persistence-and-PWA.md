@@ -1,6 +1,6 @@
 # Plan 002 — local persistence + offline shell in development mode
 
-**Status: PLANNED, after Plan 001.** This is a **development-only** local test profile; not a public guest journal. See accepted ADR 0006.
+**Status: IMPLEMENTED, pending owner review.** This is a **development-only** local test profile; not a public guest journal. See accepted ADR 0006.
 
 ## Goal
 Build reliable IndexedDB data persistence and PWA shell before Supabase, with a clearly labeled `Режим разработки — нет аккаунта и облачной копии` state. Do NOT publish this build as a usable multiuser service.
