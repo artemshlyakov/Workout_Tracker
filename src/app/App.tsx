@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { parseReps, parseWeight, removeSet, updateSet, type SetField, type WorkoutSet } from '../domain/workout'
+import { undoDeletedSet } from '../domain/undo'
 import type { WorkoutCommand, WorkoutRepository } from '../data/ports/WorkoutRepository'
 import { LocalSaveStatus } from '../features/workout/LocalSaveStatus'
 import { ExerciseCard } from '../features/workout/ExerciseCard'
@@ -107,13 +108,15 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
   function handleUndo() {
     if (!removed || !validSet(removed.set)) return
     const { set, index } = removed
+    const restored = undoDeletedSet(set, positions.current.get(set.id) ?? index)
+    positions.current.set(restored.set.id, restored.command.position)
     setSets((current) => {
-      const restored = [...current]
-      restored.splice(Math.min(index, restored.length), 0, set)
-      return restored
+      const next = [...current]
+      next.splice(Math.min(index, next.length), 0, restored.set)
+      return next
     })
     setRemoved(null)
-    enqueue({ kind: 'restoreSet', operationId: crypto.randomUUID(), ...set, position: positions.current.get(set.id) ?? index })
+    enqueue(restored.command)
   }
 
   async function handleExport() {
@@ -184,7 +187,7 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
         <input ref={fileRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Выбрать файл JSON для импорта" onChange={(event) => void handleImport(event.target.files?.[0])} />
         {notice && <p role="status" className="backup-notice">{notice}</p>}
       </section>}
-      <p className="footer-note">{authenticated ? 'Локальные данные этого аккаунта хранятся на устройстве. Облачная синхронизация пока не подтверждена.' : 'Данные хранятся только в этом браузере. Очистка хранилища удалит их.'}</p>
+      <p className="footer-note">{authenticated ? 'Локальные данные этого аккаунта хранятся на устройстве. Состояние облака показано выше.' : 'Данные хранятся только в этом браузере. Очистка хранилища удалит их.'}</p>
     </>}
   </main>
 }
