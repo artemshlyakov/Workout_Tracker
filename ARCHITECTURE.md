@@ -1,6 +1,6 @@
 # Architecture — Workout Tracker v0.5 (auth-required / local-first / closed personal pilot)
 
-**Status:** архитектурная спецификация; React-кода пока нет. Договорённости: offline-before-gym-launch (ADR 0002), private accounts required (ADR 0006), unverified-email personal pilot (ADR 0007). До Plan 004 не считать готовым.
+**Status:** архитектурная спецификация; Plan 001 объединён, Plan 002 реализует только локальную тестовую область. Договорённости: offline-before-gym-launch (ADR 0002), private accounts required (ADR 0006), unverified-email personal pilot (ADR 0007). До Plan 004 не считать готовым.
 
 ## Компоненты
 ```mermaid

@@ -16,7 +16,7 @@ const volumeFormatter = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 
 export function ExerciseCard({ sets, newestId, onChange, onAdd, onDelete }: Props) {
   const newRepsRef = useRef<HTMLInputElement>(null)
   useEffect(() => { if (newestId) newRepsRef.current?.focus() }, [newestId])
-  const incomplete = sets.some((set) => parseWeight(set.weight) === null || parseReps(set.reps) === null)
+  const incomplete = sets.some((set) => parseWeight(set.weight) === null || parseReps(set.reps) === null || parseReps(set.reps)! < 1 || parseReps(set.reps)! > 1000 || parseWeight(set.weight)! > 2000)
 
   return <section className="exercise-card" aria-labelledby="exercise-title">
     <div className="exercise-card__heading">
