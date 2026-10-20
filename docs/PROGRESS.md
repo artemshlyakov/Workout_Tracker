@@ -32,4 +32,4 @@ Plan 003A — подготовка облачной инфраструктуры
 
 ## PR или коммит
 
-Будет добавлена ссылка после создания Draft PR.
+Draft PR: https://github.com/artemshlyakov/Workout_Tracker/pull/3 (ветка `feat/plan-003a-supabase-infrastructure`, основной коммит `94fe86d`). Не объединён.
