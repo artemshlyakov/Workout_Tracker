@@ -1,6 +1,6 @@
 # Data model — local-first + Supabase v0.4
 
-**Status:** conceptual target; SQL draft `supabase/drafts/legacy_cloud_only_v0_2_NOT_FOR_EXECUTION.sql` is **CLOUD-ONLY v0.2 and NOT approved to execute**. Before any Supabase deployment, Codex must replace/review it and provide tests for syncing, RLS and grants.
+**Status:** the Plan 003A migration in `supabase/migrations/20261020132939_private_workout_sync.sql` was applied to project `snnlibzckwpmbkersdnm` via Supabase MCP; the local version now matches cloud history (details: `supabase/migrations/README.md`). Auth and sync remain future work. The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
 
 ## Logical graph
 ```mermaid
