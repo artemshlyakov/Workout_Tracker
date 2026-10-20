@@ -1,6 +1,6 @@
 # Plan 003 — Supabase email/password (closed personal pilot), RLS + initial sync
 
-**Status:** PLANNED after Plan 002. Дизайн принят, техническое решение о пилотной авторизации — ADR 0007. Создание Supabase проекта и изменение настроек выполняет владелец или подтверждает отдельно.
+**Status:** PLANNED after Plan 002. Дизайн принят, техническое решение о пилотной авторизации — ADR 0007. Plan 003A создал Free-проект и подготовил SQL к отдельному ревью; настройки Auth и применение миграции ещё не выполнены.
 
 ## Прочитать
 `AGENTS.md`, `ARCHITECTURE.md`, `docs/architecture/{auth,security,data-model,offline-sync}.md`, ADR 0006 и ADR 0007, `docs/quality/acceptance.md`.
