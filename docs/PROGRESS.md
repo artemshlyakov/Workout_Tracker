@@ -35,4 +35,4 @@ Plan 002 — локальное хранение и PWA в тестовой об
 
 ## PR или коммит
 
-Будет добавлена ссылка после создания PR.
+PR: https://github.com/artemshlyakov/Workout_Tracker/pull/2 · исходный коммит: `fc7adf8`.
