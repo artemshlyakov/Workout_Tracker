@@ -1,6 +1,6 @@
 # Data model — local-first + Supabase v0.4
 
-**Status:** conceptual target; the Plan 003A migration in `supabase/migrations/20261020124057_private_workout_sync.sql` is prepared but **not applied** (review: `docs/architecture/plan-003a-review.md`). The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
+**Status:** the Plan 003A migration in `supabase/migrations/20261020124057_private_workout_sync.sql` was applied to project `snnlibzckwpmbkersdnm` via Supabase MCP; the cloud history version differs from the local filename (details: `supabase/migrations/README.md`). Auth and sync remain future work. The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
 
 ## Logical graph
 ```mermaid
