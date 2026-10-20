@@ -1,16 +1,40 @@
 \set ON_ERROR_STOP on
 grant usage on schema auth to authenticated;
 grant execute on function auth.uid(), auth.jwt() to authenticated;
-do $$ begin
-  if not (select bool_and(relrowsecurity) from pg_class where oid in
-    ('public.workouts'::regclass,'public.exercises'::regclass,'public.workout_exercises'::regclass,
-     'public.exercise_sets'::regclass,'public.sync_operations'::regclass)) then
-    raise exception 'RLS missing';
-  end if;
-  if has_table_privilege('anon','public.workouts','SELECT') or
-     has_table_privilege('authenticated','public.workouts','INSERT') or
-     has_function_privilege('anon','public.apply_workout_operation(uuid,text,uuid,text,bigint,jsonb)','EXECUTE') then
-    raise exception 'unexpected grants';
+do $$
+declare
+  v_table text;
+  v_privilege text;
+begin
+  foreach v_table in array array[
+    'public.workouts', 'public.exercises', 'public.workout_exercises',
+    'public.exercise_sets', 'public.sync_operations'
+  ] loop
+    if not (select relrowsecurity from pg_class where oid = v_table::regclass) then
+      raise exception 'RLS missing on %', v_table;
+    end if;
+    foreach v_privilege in array array['INSERT', 'UPDATE', 'DELETE'] loop
+      if has_table_privilege('authenticated', v_table, v_privilege) then
+        raise exception 'authenticated has direct % on %', v_privilege, v_table;
+      end if;
+    end loop;
+    foreach v_privilege in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+      if has_table_privilege('anon', v_table, v_privilege) then
+        raise exception 'anon has % on %', v_privilege, v_table;
+      end if;
+      if v_table = 'public.sync_operations' and
+         has_table_privilege('authenticated', v_table, v_privilege) then
+        raise exception 'authenticated can access sync_operations via %', v_privilege;
+      end if;
+    end loop;
+    if v_table <> 'public.sync_operations' and
+       not has_table_privilege('authenticated', v_table, 'SELECT') then
+      raise exception 'authenticated cannot read own rows from %', v_table;
+    end if;
+  end loop;
+  if has_function_privilege('anon','public.apply_workout_operation(uuid,text,uuid,text,bigint,jsonb)','EXECUTE') or
+     not has_function_privilege('authenticated','public.apply_workout_operation(uuid,text,uuid,text,bigint,jsonb)','EXECUTE') then
+    raise exception 'unexpected RPC execute grants';
   end if;
 end $$;
 begin;
@@ -18,6 +42,10 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',true);
 select set_config('request.jwt.claims','{"sub":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","is_anonymous":false}',true);
 do $$ declare r jsonb; begin
+  begin
+    perform 1 from public.sync_operations;
+    raise exception 'authenticated read operation ledger directly';
+  exception when insufficient_privilege then null; end;
   r := public.apply_workout_operation('d0000000-0000-4000-8000-000000000001','workout',
     '11111111-1111-4111-8111-111111111111','upsert',null,
     '{"title":"A workout","started_at":"2026-10-20T10:00:00Z","completed_at":null}');
@@ -91,9 +119,17 @@ do $$ begin
 end $$;
 reset role;
 set local role anon;
-do $$ begin
-  if has_table_privilege('anon','public.workouts','SELECT') or
-     has_function_privilege('anon','public.apply_workout_operation(uuid,text,uuid,text,bigint,jsonb)','EXECUTE') then
-    raise exception 'anon privilege leak'; end if;
+do $$
+declare v_table text;
+begin
+  foreach v_table in array array[
+    'public.workouts', 'public.exercises', 'public.workout_exercises',
+    'public.exercise_sets', 'public.sync_operations'
+  ] loop
+    begin
+      execute format('select 1 from %s limit 1', v_table);
+      raise exception 'anon read % directly', v_table;
+    exception when insufficient_privilege then null; end;
+  end loop;
 end $$;
 rollback;

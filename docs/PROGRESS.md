@@ -9,6 +9,7 @@ Plan 003A — подготовка облачной инфраструктуры
 - Проверено, что Plan 002 объединён в `main`.
 - Через Supabase plugin найдена единственная Free-организация, проверена стоимость нового проекта 0/мес и создан `workout-tracker` (`snnlibzckwpmbkersdnm`, `eu-central-1`). Supabase подтвердил `ACTIVE_HEALTHY`, PostgreSQL 17.11; `public` и история миграций пусты.
 - Через Supabase CLI создан файл миграции; подготовлены таблицы, RLS/grants, owner-aware FK, CAS/RPC и операция ledger. Создан сценарий интеграционных проверок.
+- По внешнему ревью миграция дополнена установкой `pgcrypto` в `extensions` и проверкой `extensions.digest(bytea,text)`. Security-сценарии расширены проверками всех пользовательских таблиц и закрытого ledger.
 - Подготовлен обзор схемы и рисков: `docs/architecture/plan-003a-review.md`.
 
 ## Подготовлено, но не применено
@@ -18,8 +19,8 @@ Plan 003A — подготовка облачной инфраструктуры
 
 ## Проверки
 
-- Миграция разобрана локальным PostgreSQL-парсером `pglast` (25 SQL-операторов), затем успешно применена в одноразовом изолированном Docker-контейнере PostgreSQL 17 с тестовыми заглушками `auth.uid()`/`auth.jwt()`.
-- В локальном PostgreSQL пройдены проверки RLS и grants, A/B/anon и Auth anonymous, запрета чужих FK, повторной операции, несовпадающего payload, повторного создания UUID, CAS-конфликта и tombstone. Воспроизводимый сценарий добавлен в `supabase/tests/`; он не заменяет тесты в реальном Supabase.
+- Миграция успешно применена в двух одноразовых локальных базах PostgreSQL 17 с тестовыми заглушками `auth.uid()`/`auth.jwt()`: с заранее установленным `pgcrypto` и без него. В обоих случаях `extensions.digest(bytea,text)` доступна.
+- В обеих локальных базах пройдены проверки RLS и grants, отсутствия прямых `INSERT/UPDATE/DELETE` для `authenticated` на всех пяти таблицах, недоступности `sync_operations` и всех таблиц для `anon`, A/B и Auth anonymous, запрета чужих FK, повторной операции, несовпадающего payload, повторного UUID, CAS-конфликта и tombstone. Воспроизводимый сценарий находится в `supabase/tests/`; он не заменяет тесты в реальном Supabase.
 - `node --check supabase/tests/security.integration.mjs` — успешно; сетевой тест не запускался без миграции и двух аккаунтов.
 - `npm run lint`, `npm run typecheck`, `npm test -- --run` (15 тестов), `npm run build`, `git diff --check` — успешно.
 - Облачные SQL/RLS/REST тесты не запускались до контрольной точки применения.

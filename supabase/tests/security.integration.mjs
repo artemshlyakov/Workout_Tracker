@@ -38,10 +38,20 @@ function rejected(response) {
   assert.ok(response.status >= 400, `Expected HTTP error; received ${response.status}`)
 }
 
+function accessDenied(response) {
+  assert.ok([401, 403, 404].includes(response.status),
+    `Expected access denial or hidden endpoint; received ${response.status}`)
+}
+
 const workoutA = randomUUID()
 const workoutB = randomUUID()
+const exerciseA = randomUUID()
+const workoutExerciseA = randomUUID()
+const setA = randomUUID()
 const exerciseB = randomUUID()
 const timestamp = new Date().toISOString()
+const userA = JSON.parse(Buffer.from(aToken.split('.')[1], 'base64url').toString('utf8')).sub
+assert.ok(userA, 'User A JWT must contain sub')
 const newWorkout = (id, title) => ({
   p_operation_id: randomUUID(), p_entity_type: 'workout', p_entity_id: id,
   p_action: 'upsert', p_base_revision: null,
@@ -52,6 +62,20 @@ const createB = newWorkout(workoutB, 'Plan 003A test B')
 
 applied(await operation(aToken, createA))
 applied(await operation(bToken, createB))
+applied(await operation(aToken, {
+  p_operation_id: randomUUID(), p_entity_type: 'exercise', p_entity_id: exerciseA,
+  p_action: 'upsert', p_base_revision: null, p_payload: { name: 'Plan 003A exercise A' },
+}))
+applied(await operation(aToken, {
+  p_operation_id: randomUUID(), p_entity_type: 'workout_exercise', p_entity_id: workoutExerciseA,
+  p_action: 'upsert', p_base_revision: null,
+  p_payload: { workout_id: workoutA, exercise_id: exerciseA, position: 0 },
+}))
+applied(await operation(aToken, {
+  p_operation_id: randomUUID(), p_entity_type: 'exercise_set', p_entity_id: setA,
+  p_action: 'upsert', p_base_revision: null,
+  p_payload: { workout_exercise_id: workoutExerciseA, position: 0, weight_kg: 80, reps: 10 },
+}))
 const ownA = await request(`/rest/v1/workouts?id=eq.${workoutA}&select=id,title,revision,deleted_at`, { token: aToken })
 assert.equal(ownA.status, 200)
 assert.equal(ownA.data.length, 1)
@@ -61,27 +85,44 @@ assert.equal(ownB.data.length, 1)
 const foreign = await request(`/rest/v1/workouts?id=eq.${workoutA}&select=id`, { token: bToken })
 assert.equal(foreign.status, 200)
 assert.deepEqual(foreign.data, [])
-rejected(await request(`/rest/v1/workouts?id=eq.${workoutA}&select=id`))
-rejected(await request(`/rest/v1/workouts?id=eq.${workoutA}`, {
+const directTables = [
+  { name: 'workouts', filter: `id=eq.${workoutA}`,
+    row: { id: randomUUID(), user_id: userA, title: 'direct write', started_at: timestamp } },
+  { name: 'exercises', filter: `id=eq.${exerciseA}`,
+    row: { id: randomUUID(), user_id: userA, name: 'direct write' } },
+  { name: 'workout_exercises', filter: `id=eq.${workoutExerciseA}`,
+    row: { id: randomUUID(), user_id: userA, workout_id: workoutA, exercise_id: exerciseA, position: 0 } },
+  { name: 'exercise_sets', filter: `id=eq.${setA}`,
+    row: { id: randomUUID(), user_id: userA, workout_exercise_id: workoutExerciseA,
+      position: 0, weight_kg: 80, reps: 10 } },
+  { name: 'sync_operations', filter: `operation_id=eq.${createA.p_operation_id}`,
+    row: { user_id: userA, operation_id: randomUUID(), entity_type: 'workout',
+      entity_id: workoutA, action: 'upsert', payload_hash: `\\x${'00'.repeat(32)}`,
+      base_revision: 1, result: { status: 'forged' } } },
+]
+for (const { name, filter, row } of directTables) {
+  const path = `/rest/v1/${name}`
+  accessDenied(await request(`${path}?select=*`))
+  accessDenied(await request(path, { token: aToken, method: 'POST', body: row }))
+  accessDenied(await request(`${path}?${filter}`, {
+    token: aToken, method: 'PATCH', body: name === 'sync_operations'
+      ? { result: { status: 'forged' } } : { revision: 999 },
+  }))
+  accessDenied(await request(`${path}?${filter}`, { token: aToken, method: 'DELETE' }))
+  if (name === 'sync_operations') {
+    accessDenied(await request(`${path}?select=*`, { token: aToken }))
+    accessDenied(await request(`${path}?select=*`, { token: bToken }))
+  }
+}
+accessDenied(await request(`/rest/v1/workouts?id=eq.${workoutA}`, {
   token: bToken, method: 'PATCH', body: { title: 'forged' },
-}))
-rejected(await request(`/rest/v1/workouts?id=eq.${workoutA}`, {
-  token: aToken, method: 'PATCH', body: { revision: 999 },
-}))
-rejected(await request('/rest/v1/workouts', {
-  token: aToken, method: 'POST', body: {
-    id: randomUUID(), title: 'direct write', started_at: timestamp,
-  },
-}))
-rejected(await request(`/rest/v1/workouts?id=eq.${workoutA}`, {
-  token: aToken, method: 'DELETE',
 }))
 const foreignRpc = await operation(bToken, { ...createA, p_operation_id: randomUUID(),
   p_base_revision: 1, p_payload: { ...createA.p_payload, title: 'foreign RPC' } })
 assert.equal(foreignRpc.status, 200)
 assert.equal(foreignRpc.data.status, 'conflict')
 assert.equal(foreignRpc.data.server_revision, null)
-rejected(await operation(undefined, newWorkout(randomUUID(), 'anonymous')))
+accessDenied(await operation(undefined, newWorkout(randomUUID(), 'anonymous')))
 
 const replay = applied(await operation(aToken, createA))
 assert.equal(replay.revision, 1)
@@ -121,4 +162,4 @@ assert.equal(deleted.revision, 3)
 const tombstone = await request(`/rest/v1/workouts?id=eq.${workoutA}&select=deleted_at,revision`, { token: aToken })
 assert.equal(tombstone.data[0].revision, 3)
 assert.ok(tombstone.data[0].deleted_at)
-console.log('Security integration checks passed for A, B, anon, FK, replay, CAS and tombstone')
+console.log('Security integration checks passed for A, B, anon, direct table access, FK, replay, CAS and tombstone')

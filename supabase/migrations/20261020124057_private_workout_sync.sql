@@ -2,6 +2,19 @@
 -- Client-generated UUIDs stay stable across local and cloud stores.
 -- Direct client writes are denied: all mutations pass through the CAS RPC below.
 
+-- The operation fingerprint uses pgcrypto.digest(bytea, text). A new Supabase
+-- project usually has pgcrypto in extensions already; this also supports one
+-- where the extension is available but has not yet been enabled.
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
+do $$
+begin
+  if to_regprocedure('extensions.digest(bytea,text)') is null then
+    raise exception 'pgcrypto must provide extensions.digest(bytea,text) before workout schema is installed';
+  end if;
+end;
+$$;
+
 create table public.workouts (
   id uuid primary key,
   user_id uuid not null references auth.users(id) on delete restrict,
