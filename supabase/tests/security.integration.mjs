@@ -85,6 +85,16 @@ assert.equal(ownB.data.length, 1)
 const foreign = await request(`/rest/v1/workouts?id=eq.${workoutA}&select=id`, { token: bToken })
 assert.equal(foreign.status, 200)
 assert.deepEqual(foreign.data, [])
+for (const [table, id] of [
+  ['exercises', exerciseA], ['workout_exercises', workoutExerciseA], ['exercise_sets', setA],
+]) {
+  const own = await request(`/rest/v1/${table}?id=eq.${id}&select=id`, { token: aToken })
+  assert.equal(own.status, 200)
+  assert.equal(own.data.length, 1)
+  const hidden = await request(`/rest/v1/${table}?id=eq.${id}&select=id`, { token: bToken })
+  assert.equal(hidden.status, 200)
+  assert.deepEqual(hidden.data, [])
+}
 const directTables = [
   { name: 'workouts', filter: `id=eq.${workoutA}`,
     row: { id: randomUUID(), user_id: userA, title: 'direct write', started_at: timestamp } },
@@ -109,6 +119,11 @@ for (const { name, filter, row } of directTables) {
       ? { result: { status: 'forged' } } : { revision: 999 },
   }))
   accessDenied(await request(`${path}?${filter}`, { token: aToken, method: 'DELETE' }))
+  accessDenied(await request(path, { method: 'POST', body: row }))
+  accessDenied(await request(`${path}?${filter}`, {
+    method: 'PATCH', body: { revision: 999 },
+  }))
+  accessDenied(await request(`${path}?${filter}`, { method: 'DELETE' }))
   if (name === 'sync_operations') {
     accessDenied(await request(`${path}?select=*`, { token: aToken }))
     accessDenied(await request(`${path}?select=*`, { token: bToken }))
