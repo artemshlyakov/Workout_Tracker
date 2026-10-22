@@ -1,4 +1,4 @@
-# Plan 003A security checks
+# Plan 003A/003B security and sync checks
 
 `security.integration.mjs` runs against the real Supabase REST/RPC endpoints **only after** the reviewed migration is applied and two controlled test accounts A/B exist. It creates test rows in both accounts. It checks A/B/anon visibility, direct table writes, forged FK, operation replay, CAS and tombstones.
 
@@ -10,6 +10,8 @@ For the closed Plan 003B pilot, `auth-pilot.mjs` stages the work so signup is op
 4. Keep the temporary credential file until remaining browser/reconnect checks finish; then run `node supabase/tests/auth-pilot.mjs cleanup`. This removes only local test passwords, **not** cloud accounts or data. If the workspace is replaced before tests finish, the generated passwords may be unrecoverable.
 
 Do not copy the temporary file, passwords, JWTs or session responses into Git, CI, PR descriptions or logs. If signup returns a user without a session, stop: Confirm Email may still be enabled, and a user might already have been created. Do not repeat signup blindly. The script does not use a service role key or Supabase admin API.
+
+After `verify`, run `NODE_USE_ENV_PROXY=1 node_modules/.bin/vite-node supabase/tests/sync.integration.ts` with the same public `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` variables. This live adapter check reads the existing temporary A/B credential file, creates test records in both cloud accounts, and checks account scope, JWT ownership, push, local queue, reopening and fresh pull. It does not test a real browser's IndexedDB, service worker or network transitions. It removes only its temporary local fake IndexedDB databases; cloud test records remain for inspection.
 
 The SQL fixture is a narrower, reproducible **local** check of the migration and SQL authorization behavior. It simulates `auth.uid()`/`auth.jwt()` with session settings and cannot verify Supabase Auth or PostgREST. Run it only in an empty, disposable PostgreSQL 17 database with `pgcrypto` available to install:
 

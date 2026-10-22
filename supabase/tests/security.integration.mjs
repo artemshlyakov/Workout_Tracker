@@ -121,7 +121,8 @@ for (const { name, filter, row } of directTables) {
   accessDenied(await request(`${path}?${filter}`, { token: aToken, method: 'DELETE' }))
   accessDenied(await request(path, { method: 'POST', body: row }))
   accessDenied(await request(`${path}?${filter}`, {
-    method: 'PATCH', body: { revision: 999 },
+    method: 'PATCH', body: name === 'sync_operations'
+      ? { result: { status: 'forged' } } : { revision: 999 },
   }))
   accessDenied(await request(`${path}?${filter}`, { method: 'DELETE' }))
   if (name === 'sync_operations') {
