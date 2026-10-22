@@ -111,7 +111,7 @@ async function main() {
   console.log('Новый signup сервером отклонён; A/B могут входить')
   const result = spawnSync(process.execPath, ['supabase/tests/security.integration.mjs'], {
     cwd: process.cwd(), stdio: 'inherit',
-    env: { SUPABASE_URL: url, SUPABASE_PUBLISHABLE_KEY: key,
+    env: { ...process.env, SUPABASE_URL: url, SUPABASE_PUBLISHABLE_KEY: key,
       TEST_USER_A_JWT: aToken, TEST_USER_B_JWT: bToken },
   })
   assert.equal(result.status, 0, 'Интеграционные security-проверки не прошли')
