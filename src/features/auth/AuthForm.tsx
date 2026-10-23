@@ -10,6 +10,7 @@ export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?
   const [registering, setRegistering] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -17,9 +18,19 @@ export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?
     if (registering && password !== confirm) { setError('Пароли не совпадают'); return }
     setBusy(true)
     setError(null)
+    setSuccess(null)
     try {
-      if (registering) await signUp(email.trim(), password)
-      else await signIn(email.trim(), password)
+      if (registering) {
+        const result = await signUp(email.trim(), password)
+        if (result === 'confirmation_required') {
+          setSuccess('Если для этого адреса создан аккаунт, проверьте почту и перейдите по ссылке подтверждения. Затем войдите.')
+          setRegistering(false)
+          setConfirm('')
+          return
+        }
+      } else {
+        await signIn(email.trim(), password)
+      }
       onSuccess()
     } catch (cause) {
       setError(authErrorMessage(cause))
@@ -40,10 +51,11 @@ export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?
         <label className="auth-toggle"><input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} /> Показать пароль</label>
         {registering && <><label htmlFor="auth-confirm">ПОВТОРИТЕ ПАРОЛЬ</label><input id="auth-confirm" type={showPassword ? 'text' : 'password'} autoComplete="new-password" required value={confirm} onChange={(event) => setConfirm(event.target.value)} /></>}
         {error && <p role="alert" className="auth-error">{error}</p>}
+        {success && <p role="status" className="auth-success">{success}</p>}
         <Button type="submit" disabled={busy}>{busy ? 'Подождите…' : registering ? 'Создать аккаунт' : 'Войти'}</Button>
       </form>
     </section>
-    <Button variant="quiet" disabled={busy} onClick={() => { setRegistering(!registering); setError(null); setConfirm('') }}>{registering ? 'Вернуться ко входу' : 'Создать аккаунт'}</Button>
+    <Button variant="quiet" disabled={busy} onClick={() => { setRegistering(!registering); setError(null); setSuccess(null); setConfirm('') }}>{registering ? 'Вернуться ко входу' : 'Создать аккаунт'}</Button>
     <p className="footer-note">Для первого входа нужен интернет. Восстановление пароля по почте пока недоступно.</p>
   </main>
 }
