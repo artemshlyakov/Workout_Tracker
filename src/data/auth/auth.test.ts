@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  getSession: vi.fn(), getUser: vi.fn(), signOut: vi.fn(),
+  getSession: vi.fn(), getUser: vi.fn(), signOut: vi.fn(), signUp: vi.fn(),
 }))
 vi.mock('../cloud/client', () => ({ supabase: { auth: mocks } }))
 
-import { authErrorMessage, restoreAuth, signOut } from './auth'
+import { authErrorMessage, restoreAuth, signOut, signUp } from './auth'
 
 const user = { id: '11111111-1111-4111-8111-111111111111', email: 'owner@example.test', is_anonymous: false }
 
@@ -14,9 +14,25 @@ beforeEach(() => {
   mocks.getSession.mockReset().mockResolvedValue({ data: { session: { user } }, error: null })
   mocks.getUser.mockReset().mockResolvedValue({ data: { user }, error: null })
   mocks.signOut.mockReset().mockResolvedValue({ error: null })
+  mocks.signUp.mockReset()
 })
 
 describe('auth lifecycle', () => {
+  it('accepts immediate sign-in after signup', async () => {
+    mocks.signUp.mockResolvedValue({ data: { session: { access_token: 'test' }, user }, error: null })
+    expect(await signUp('test@example.test', 'password')).toBe('signed_in')
+  })
+
+  it('handles email-confirmation signup without falsely claiming a failed signup', async () => {
+    mocks.signUp.mockResolvedValue({ data: { session: null, user }, error: null })
+    expect(await signUp('test@example.test', 'password')).toBe('confirmation_required')
+  })
+
+  it('rejects actual server signup errors', async () => {
+    mocks.signUp.mockResolvedValue({ data: { session: null, user: null }, error: { code: 'signup_disabled' } })
+    await expect(signUp('test@example.test', 'password')).rejects.toMatchObject({ code: 'signup_disabled' })
+  })
+
   it('allows an online workspace only after getUser confirms the same account', async () => {
     expect((await restoreAuth()).kind).toBe('SIGNED_IN_ONLINE')
     mocks.getUser.mockResolvedValue({ data: { user: { ...user, id: 'other' } }, error: null })
