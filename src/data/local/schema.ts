@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie'
+import type { WorkoutDraftState } from '../ports/WorkoutRepository'
 
 export const DEV_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 export const BACKUP_VERSION = 1
@@ -9,6 +10,8 @@ export interface Workspace {
   ownerUserId: string | null
   createdAt: string
   lastActiveAt: string
+  draft?: WorkoutDraftState | null
+  importedCopies?: string[]
 }
 
 interface RecordMeta {
@@ -26,6 +29,7 @@ export interface WorkoutRecord extends RecordMeta {
   title: string
   startedAt: string
   completedAt: string | null
+  editingCompletedAt?: string
 }
 
 export interface ExerciseRecord extends RecordMeta { name: string }

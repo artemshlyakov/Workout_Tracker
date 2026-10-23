@@ -1,6 +1,7 @@
 import { parseReps, parseWeight } from '../../domain/workout'
-import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView } from '../ports/WorkoutRepository'
+import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView, WorkoutDraftState } from '../ports/WorkoutRepository'
 import { parseBackup } from './backup'
+import { parseAccountBackup } from './accountBackup'
 import { DEV_WORKSPACE_ID, WorkoutDatabase, type DevBackup, type ExerciseRecord, type ExerciseSetRecord, type OutboxOperation, type WorkoutExerciseRecord, type WorkoutRecord } from './schema'
 
 const now = () => new Date().toISOString()
@@ -84,7 +85,7 @@ export class DexieWorkoutRepository implements WorkoutRepository {
         sets: records.filter((set) => !set.deletedAt).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
           .map((set) => ({ id: set.id, weight: String(set.weightCentiKg / 100).replace('.', ','), reps: String(set.reps), position: set.position })) }
     }))
-    return { title: workout.title, workoutId: workout.id, exercises, active: true }
+    return { title: workout.title, workoutId: workout.id, startedAt: workout.startedAt, exercises, active: true }
   }
 
   async listJournal(): Promise<JournalView> {
@@ -119,7 +120,7 @@ export class DexieWorkoutRepository implements WorkoutRepository {
     if (!uuidPattern.test(command.operationId) || ('id' in command && !uuidPattern.test(command.id)) ||
       ('relationId' in command && !uuidPattern.test(command.relationId)) ||
       ('exerciseId' in command && !uuidPattern.test(command.exerciseId)) ||
-      (command.kind === 'startWorkout' && !uuidPattern.test(command.workoutId))) throw new Error('Неверный идентификатор операции')
+      ('workoutId' in command && !uuidPattern.test(command.workoutId))) throw new Error('Неверный идентификатор операции')
     await this.initialize()
     await this.db.transaction('rw', this.db.workouts, this.db.exercises, this.db.workoutExercises, this.db.exerciseSets, this.db.outbox, async () => {
       if (await this.db.outbox.where('operationId').equals(command.operationId).first()) return
@@ -129,9 +130,77 @@ export class DexieWorkoutRepository implements WorkoutRepository {
         if (!title || title.length > 60) throw new Error('Введите название до 60 символов')
         const active = await this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray()
         if (active.some((item) => !item.deletedAt && !item.completedAt)) throw new Error('Сначала завершите текущую тренировку')
-        const workout: WorkoutRecord = { ...meta(command.workoutId, time, this.workspaceId, this.ownerUserId), title, startedAt: time, completedAt: null }
+        const startedAt = command.startedAt ?? time
+        if (!Number.isFinite(Date.parse(startedAt)) || Date.parse(startedAt) > Date.now()) throw new Error('Выберите сегодняшнюю или прошедшую дату')
+        const workout: WorkoutRecord = { ...meta(command.workoutId, time, this.workspaceId, this.ownerUserId), title, startedAt, completedAt: null }
         await this.db.workouts.add(workout)
         await this.db.outbox.add(operation('workout', workout, 'upsert', command.operationId))
+        const names = [...new Set(command.exerciseNames ?? [])]
+        if (names.length > 50 || names.some((name) => !name.trim() || name.length > 120)) throw new Error('Некорректный состав тренировки')
+        const existing = await this.db.exercises.where('workspaceId').equals(this.workspaceId).toArray()
+        for (const [position, name] of names.entries()) {
+          let exercise = existing.find((item) => !item.deletedAt && item.name.toLocaleLowerCase('ru') === name.trim().toLocaleLowerCase('ru'))
+          if (!exercise) {
+            exercise = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), name: name.trim() }
+            await this.db.exercises.add(exercise)
+            await this.db.outbox.add(operation('exercise', exercise))
+            existing.push(exercise)
+          }
+          const relation: WorkoutExerciseRecord = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), workoutId: workout.id, exerciseId: exercise.id, position }
+          await this.db.workoutExercises.add(relation)
+          await this.db.outbox.add(operation('workoutExercise', relation))
+        }
+        return
+      }
+      if (command.kind === 'reopenWorkout') {
+        const all = await this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray()
+        if (all.some((item) => !item.deletedAt && !item.completedAt)) throw new Error('Сначала завершите текущую тренировку')
+        const workout = all.find((item) => item.id === command.workoutId && !item.deletedAt)
+        if (!workout) throw new Error('Тренировка не найдена')
+        const updated = { ...workout, editingCompletedAt: workout.completedAt ?? undefined, completedAt: null, updatedAt: time, localRevision: workout.localRevision + 1 }
+        await this.db.workouts.put(updated)
+        await this.db.outbox.add(operation('workout', updated, 'upsert', command.operationId))
+        return
+      }
+      if (command.kind === 'changeDate') {
+        if (!Number.isFinite(Date.parse(command.startedAt)) || Date.parse(command.startedAt) > Date.now()) throw new Error('Выберите сегодняшнюю или прошедшую дату')
+        const workout = await this.activeWorkout()
+        const updated = { ...workout, startedAt: command.startedAt, editingCompletedAt: workout.editingCompletedAt && workout.editingCompletedAt < command.startedAt ? command.startedAt : workout.editingCompletedAt, updatedAt: time, localRevision: workout.localRevision + 1 }
+        await this.db.workouts.put(updated)
+        await this.db.outbox.add(operation('workout', updated, 'upsert', command.operationId))
+        return
+      }
+      if (command.kind === 'discardWorkout' || command.kind === 'removeExercise' || command.kind === 'moveExercise') {
+        const workout = await this.activeWorkout()
+        const relations = (await this.db.workoutExercises.where('workoutId').equals(workout.id).toArray()).filter((item) => !item.deletedAt).sort((a, b) => a.position - b.position)
+        if (command.kind === 'moveExercise') {
+          const index = relations.findIndex((item) => item.id === command.relationId)
+          const other = relations[index + command.direction]
+          if (index < 0 || !other) throw new Error('Нельзя переместить упражнение')
+          const selected = relations[index]
+          const updated = [ { ...selected, position: other.position, updatedAt: time, localRevision: selected.localRevision + 1 }, { ...other, position: selected.position, updatedAt: time, localRevision: other.localRevision + 1 } ]
+          await this.db.workoutExercises.bulkPut(updated)
+          await this.db.outbox.bulkAdd(updated.map((row, i) => operation('workoutExercise', row, 'upsert', i === 0 ? command.operationId : uuid())))
+          return
+        }
+        const targets = command.kind === 'removeExercise' ? relations.filter((item) => item.id === command.relationId) : relations
+        if (command.kind === 'removeExercise' && !targets.length) throw new Error('Упражнение не найдено')
+        for (const relation of targets) {
+          const sets = (await this.db.exerciseSets.where('workoutExerciseId').equals(relation.id).toArray()).filter((item) => !item.deletedAt)
+          for (const set of sets) {
+            const deleted = { ...set, deletedAt: time, updatedAt: time, localRevision: set.localRevision + 1 }
+            await this.db.exerciseSets.put(deleted)
+            await this.db.outbox.add(operation('exerciseSet', deleted, 'delete'))
+          }
+          const deleted = { ...relation, deletedAt: time, updatedAt: time, localRevision: relation.localRevision + 1 }
+          await this.db.workoutExercises.put(deleted)
+          await this.db.outbox.add(operation('workoutExercise', deleted, 'delete', command.kind === 'removeExercise' ? command.operationId : uuid()))
+        }
+        if (command.kind === 'discardWorkout') {
+          const deleted = { ...workout, deletedAt: time, updatedAt: time, localRevision: workout.localRevision + 1 }
+          await this.db.workouts.put(deleted)
+          await this.db.outbox.add(operation('workout', deleted, 'delete', command.operationId))
+        }
         return
       }
       if (command.kind === 'createExercise') {
@@ -162,7 +231,7 @@ export class DexieWorkoutRepository implements WorkoutRepository {
         const relations = (await this.db.workoutExercises.where('workoutId').equals(workout.id).toArray()).filter((item) => !item.deletedAt)
         const sets = await this.db.exerciseSets.where('workspaceId').equals(this.workspaceId).toArray()
         if (!sets.some((set) => !set.deletedAt && relations.some((item) => item.id === set.workoutExerciseId))) throw new Error('Добавьте хотя бы один подход')
-        const completed: WorkoutRecord = { ...workout, completedAt: time, updatedAt: time, localRevision: workout.localRevision + 1 }
+        const completed: WorkoutRecord = { ...workout, completedAt: workout.editingCompletedAt ?? time, updatedAt: time, localRevision: workout.localRevision + 1 }
         await this.db.workouts.put(completed)
         await this.db.outbox.add(operation('workout', completed, 'upsert', command.operationId))
         return
@@ -205,6 +274,14 @@ export class DexieWorkoutRepository implements WorkoutRepository {
     })
   }
 
+  async loadDraft(): Promise<WorkoutDraftState | null> {
+    return (await this.db.workspaces.get(this.workspaceId))?.draft ?? null
+  }
+
+  async saveDraft(draft: WorkoutDraftState | null): Promise<void> {
+    await this.db.workspaces.update(this.workspaceId, { draft })
+  }
+
   async exportData(): Promise<string> {
     await this.initialize()
     return this.db.transaction('r', [this.db.workspaces, this.db.workouts, this.db.exercises,
@@ -241,6 +318,47 @@ export class DexieWorkoutRepository implements WorkoutRepository {
       if (!workspace || !syncState || [...workouts, ...exercises, ...workoutExercises, ...exerciseSets, ...outbox, workspace, syncState].some((row) => row.ownerUserId !== owner)) throw new Error('Обнаружены данные другого аккаунта или неполная локальная область')
       return JSON.stringify({ format: 'workout-tracker-account-export', version: 1, ownerUserId: owner,
         exportedAt: now(), workouts, exercises, workoutExercises, exerciseSets, outbox, syncState }, null, 2)
+    })
+  }
+
+  async importAccountData(json: string): Promise<number> {
+    if (!this.ownerUserId) throw new Error('Для восстановления нужен вход')
+    const backup = parseAccountBackup(json, this.ownerUserId)
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    await this.initialize()
+    return this.db.transaction('rw', [this.db.workspaces, this.db.workouts, this.db.exercises, this.db.workoutExercises, this.db.exerciseSets, this.db.outbox], async () => {
+      const workspace = await this.db.workspaces.get(this.workspaceId)
+      if (workspace?.importedCopies?.includes(digest)) throw new Error('Эта копия уже восстановлена на устройстве')
+      const source = backup.workouts.filter((row) => !row.deletedAt)
+      const current = await this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray()
+      const activeCount = source.filter((row) => !row.completedAt).length
+      if (activeCount > 1 || activeCount && current.some((row) => !row.deletedAt && !row.completedAt)) throw new Error('Сначала завершите текущую тренировку; в копии есть незавершённая')
+      const time = now()
+      const exerciseMap = new Map<string, string>()
+      const catalog = await this.db.exercises.where('workspaceId').equals(this.workspaceId).toArray()
+      for (const exercise of backup.exercises.filter((row) => !row.deletedAt)) {
+        const existing = catalog.find((row) => !row.deletedAt && row.name.toLocaleLowerCase('ru') === exercise.name.toLocaleLowerCase('ru'))
+        if (existing) { exerciseMap.set(exercise.id, existing.id); continue }
+        const copy: ExerciseRecord = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), name: exercise.name }
+        await this.db.exercises.add(copy); await this.db.outbox.add(operation('exercise', copy))
+        catalog.push(copy); exerciseMap.set(exercise.id, copy.id)
+      }
+      for (const workout of source) {
+        const copy: WorkoutRecord = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), title: `${workout.title.slice(0, 52)} (копия)`, startedAt: workout.startedAt, completedAt: workout.completedAt }
+        await this.db.workouts.add(copy); await this.db.outbox.add(operation('workout', copy))
+        for (const relation of backup.workoutExercises.filter((row) => !row.deletedAt && row.workoutId === workout.id)) {
+          const exerciseId = exerciseMap.get(relation.exerciseId)
+          if (!exerciseId) throw new Error('Упражнение не найдено в копии')
+          const newRelation: WorkoutExerciseRecord = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), workoutId: copy.id, exerciseId, position: relation.position }
+          await this.db.workoutExercises.add(newRelation); await this.db.outbox.add(operation('workoutExercise', newRelation))
+          for (const set of backup.exerciseSets.filter((row) => !row.deletedAt && row.workoutExerciseId === relation.id)) {
+            const newSet: ExerciseSetRecord = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), workoutExerciseId: newRelation.id, position: set.position, weightCentiKg: set.weightCentiKg, reps: set.reps }
+            await this.db.exerciseSets.add(newSet); await this.db.outbox.add(operation('exerciseSet', newSet))
+          }
+        }
+      }
+      await this.db.workspaces.update(this.workspaceId, { importedCopies: [...(workspace?.importedCopies ?? []), digest].slice(-100) })
+      return source.length
     })
   }
 

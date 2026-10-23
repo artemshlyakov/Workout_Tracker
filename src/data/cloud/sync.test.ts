@@ -19,6 +19,8 @@ function request<T>(result: T | Promise<T>) {
   const headers = new Map<string, string>()
   return {
     headers,
+    order() { return this },
+    range() { return this },
     setHeader(name: string, value: string) { headers.set(name, value); return this },
     abortSignal(value: AbortSignal) { signal = value; return this },
     then(resolve: (value: T) => unknown, reject: (reason: unknown) => unknown) {
@@ -225,5 +227,85 @@ describe('initial account sync', () => {
       ['delete', originalId], ['upsert', undo.set.id],
     ])
     expect((await repository.load()).exercises[0]?.sets.map((set) => set.id)).toEqual([undo.set.id])
+  })
+})
+
+function cloudRows(rows: Record<string, Record<string, unknown>[]>, onRead?: () => Promise<void>) {
+  return { ...client, from: vi.fn((name: string) => {
+    let start = 0, end = 499, singleId: unknown
+    const query = {
+      select() { return this }, eq(key: string, value: unknown) { if (key === 'id') singleId = value; return this },
+      order() { return this }, range(a: number, b: number) { start = a; end = b; return this },
+      setHeader() { return this }, abortSignal() { return this },
+      async maybeSingle() { return { data: rows[name]?.find((row) => row.id === singleId), error: null } },
+      async then(resolve: (value: unknown) => unknown) { await onRead?.(); return resolve({ data: (rows[name] ?? []).slice(start, end + 1), error: null }) },
+    }
+    return query
+  }) } as unknown as SupabaseClient
+}
+const cloudWorkout = (id: string = crypto.randomUUID(), revision = 1) => ({ id, user_id: owner, revision, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-01T10:00:00Z', deleted_at: null as string | null, title: 'Облако', started_at: '2026-01-01T10:00:00Z', completed_at: '2026-01-01T11:00:00Z' })
+
+describe('repeat pulls and explicit conflict resolution', () => {
+  it('paginates beyond 500 records and applies newer revisions and tombstones without clearing local history', async () => {
+    const rows = { workouts: Array.from({ length: 501 }, () => cloudWorkout()) }
+    const sync = new CloudSync(repository, cloudRows(rows))
+    await sync.prepare()
+    expect(await db.workouts.count()).toBe(501)
+    rows.workouts[0].revision = 2; rows.workouts[0].title = 'Изменено'
+    rows.workouts[1].revision = 2; rows.workouts[1].deleted_at = '2026-01-02T10:00:00Z'
+    const absent = rows.workouts.pop()!
+    await sync.prepare()
+    expect((await db.workouts.get(rows.workouts[0].id))?.title).toBe('Изменено')
+    expect((await db.workouts.get(rows.workouts[1].id))?.deletedAt).not.toBeNull()
+    expect(await db.workouts.get(absent.id)).toBeDefined()
+  })
+
+  it('does not overwrite pending writes, dirty drafts, or writes arriving during the network read', async () => {
+    const row = cloudWorkout(); row.completed_at = null as unknown as string
+    const sync = new CloudSync(repository, cloudRows({ workouts: [row] }))
+    await sync.prepare()
+    await repository.saveDraft({ workoutId: row.id, title: 'Ввод', dirty: true, rows: {}, restUntil: null })
+    expect(await sync.prepare()).toEqual({ cloudChecked: false })
+    await repository.saveDraft(null)
+    let first = true
+    const delayed = new CloudSync(repository, cloudRows({ workouts: [{ ...row, revision: 2 }] }, async () => {
+      if (!first) return
+      first = false
+      await repository.apply({ kind: 'rename', operationId: crypto.randomUUID(), title: 'Локальное' })
+    }))
+    expect(await delayed.prepare()).toEqual({ cloudChecked: false })
+    expect((await repository.load()).title).toBe('Локальное')
+    expect(await sync.prepare()).toEqual({ cloudChecked: false })
+    expect(await db.outbox.count()).toBe(1)
+  })
+
+  it('rejects a partial relational snapshot without damaging existing history', async () => {
+    const row = cloudWorkout()
+    await new CloudSync(repository, cloudRows({ workouts: [row] })).prepare()
+    const bad = cloudRows({ workouts: [], workout_exercises: [{ ...row, workout_id: row.id, exercise_id: crypto.randomUUID(), position: 0 }] })
+    await expect(new CloudSync(repository, bad).prepare()).rejects.toThrow('история обновляется')
+    expect(await db.workouts.count()).toBe(1)
+  })
+
+  it.each(['local', 'cloud'] as const)('resolves a %s choice once, preserves unrelated operations and checks the displayed cloud revision', async (choice) => {
+    await seedAccount()
+    const operation = (await db.outbox.toArray())[0]
+    await db.outbox.update(operation.sequence!, { status: 'conflict' })
+    const row = cloudWorkout(operation.entityId, 5)
+    const sync = new CloudSync(repository, cloudRows({ workouts: [row] }))
+    const conflict = (await sync.getConflict())!
+    row.revision = 6
+    await expect(sync.resolveConflict(conflict, choice)).rejects.toThrow('Облачная версия изменилась')
+    row.revision = 5
+    const before = (await db.outbox.toArray()).filter((item) => item.entityId !== operation.entityId)
+    await sync.resolveConflict(conflict, choice)
+    expect((await db.outbox.toArray()).filter((item) => item.entityId !== operation.entityId)).toEqual(before)
+    const local = await db.workouts.get(operation.entityId)
+    expect(local?.serverRevision).toBe(5)
+    expect(local?.title).toBe(choice === 'cloud' ? 'Облако' : 'Силовая тренировка')
+    const queued = (await db.outbox.toArray()).filter((item) => item.entityId === operation.entityId)
+    expect(queued).toHaveLength(choice === 'local' ? 1 : 0)
+    if (choice === 'local') expect(queued[0].operationId).not.toBe(operation.operationId)
+    await expect(sync.resolveConflict(conflict, choice)).rejects.toThrow('Конфликт уже изменился')
   })
 })

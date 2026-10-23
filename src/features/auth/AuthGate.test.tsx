@@ -66,7 +66,7 @@ it('scopes errors, draft state, status, and workspace to each account across swi
   expect(container.textContent).not.toContain('A network error')
   expect(container.textContent).toContain('Облачное состояние ещё не проверено')
   expect(state.stops).toContain('A')
-  await act(async () => { [...container.querySelectorAll('button')].find((button) => button.textContent === 'Выйти')!.click() })
+  await act(async () => { [...container.querySelectorAll('button')].find((button) => button.textContent === 'Выйти из аккаунта')!.click() })
   await vi.waitFor(() => expect(container.querySelector('[data-testid=workout]')).toBeNull())
   expect(window.confirm).not.toHaveBeenCalled()
   state.failA = false

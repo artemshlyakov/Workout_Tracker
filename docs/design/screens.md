@@ -11,7 +11,7 @@ Four tabs: `Тренировка`, `История`, `Упражнения`, `П
 Top: `Тренировка`, current local date, editable workout title; clear save status and overflow menu.
 Exercise block: name, optional previous-session reference; each row shows `№ | Вес, кг | Повторы | выполнено` with per-row edit/delete actions. Primary action bottom of exercise card `+ Добавить подход`.
 
-Behavior: tapping add creates one new row with previous weight prefilled (if available) and focused reps input. Editing updates volume immediately. Prevent duplicates from accidental double tap. Show set-level confirmation and restore ability for undo where safe. Workout-complete action must not erase edits. The header is distinct from a timer; timer is deferred.
+Behavior: tapping add creates one new row with previous weight prefilled (if available) and focused reps input. Editing updates volume immediately. Prevent duplicates from accidental double tap. Show set-level confirmation and restore ability for undo where safe. Workout-complete action must not erase edits. The header is distinct from the separate rest timer introduced in Plan 006.
 
 For no workout: big `Начать тренировку` CTA, date, recent workout summary (if any). Plan 001 may begin directly with a seeded demo workout and a visible demo label.
 
@@ -37,7 +37,7 @@ Dedicated login with email + password. Signup screen **только для пе�
 
 ## 6. Settings / Data
 
-Export personal data to versioned JSON; import is deferred and must not be falsely offered. Account status, sign out and app version. Offline phase: pending count, explicit `Синхронизировать`, retry information.
+Export personal data to versioned JSON; import adds validated copies under the same owner without replacing the journal (ADR 0008). Account status, sign out and app version. Offline phase: pending count, explicit `Синхронизировать`, retry information.
 
 ## States mandatory for each implemented screen
 
@@ -53,3 +53,7 @@ Loading, empty, signed out, offline with cached prior identity, first-login offl
 ## Implemented multi-exercise entry
 
 Start with a required user-provided workout name; no catalog exercise is inserted for a new account. The active screen can attach several existing catalog entries or create and attach a new one. Each exercise card owns independent ordered sets. Adding a row copies the previous weight only as a draft, leaves repetitions empty, and writes nothing until the user explicitly saves valid weight and repetitions. Editing a saved row also requires explicit save. Finish is enabled only when a saved set exists and no unsaved drafts or title edit remain; it opens the existing history, which retains every exercise and set after reload. Local visual checks at 360 and 390 px: `../screenshots/workout-multi-360.png`, `../screenshots/workout-multi-390.png`. The screenshots use a temporary local account and do not establish cloud browser coverage.
+
+## Plan 006
+
+Календарь, фильтр дня, повтор/исправление записи, справочник с изображениями и фильтрами, предыдущий вес, черновики, отдых и интервалы 30/90 дней реализованы. Пользовательский контракт и ограничения: `../operations/personal-diary.md`. Актуальные снимки: `../screenshots/diary-{workout,history,library}-390.png` — локальный тестовый owner без облачного входа.
