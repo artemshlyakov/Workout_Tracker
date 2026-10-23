@@ -10,7 +10,6 @@ export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?
   const [registering, setRegistering] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const signupEnabled = import.meta.env.VITE_SHOW_SIGNUP === 'true' || new URLSearchParams(window.location.search).get('signup') === '1'
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -44,7 +43,7 @@ export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?
         <Button type="submit" disabled={busy}>{busy ? 'Подождите…' : registering ? 'Создать аккаунт' : 'Войти'}</Button>
       </form>
     </section>
-    {signupEnabled ? <Button variant="quiet" onClick={() => { setRegistering(!registering); setError(null) }}>{registering ? 'Вернуться ко входу' : 'Создать аккаунт'}</Button> : <p className="footer-note">Регистрация временно закрыта.</p>}
-    <p className="footer-note">Для первого входа нужен интернет. Восстановление пароля пока недоступно. В закрытом пилоте почта не подтверждается.</p>
+    <Button variant="quiet" disabled={busy} onClick={() => { setRegistering(!registering); setError(null); setConfirm('') }}>{registering ? 'Вернуться ко входу' : 'Создать аккаунт'}</Button>
+    <p className="footer-note">Для первого входа нужен интернет. Восстановление пароля по почте пока недоступно.</p>
   </main>
 }
