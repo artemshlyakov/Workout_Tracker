@@ -31,6 +31,7 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
 
   const refresh = useCallback(async (preserveDrafts = false) => {
     const next = await repository.load()
+    if (!preserveDrafts) setRemoved(null)
     setView(next)
     setTitle((current) => preserveDrafts && current.trim() ? current : next.title)
     setDrafts((current) => {
