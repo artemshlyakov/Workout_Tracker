@@ -25,7 +25,7 @@ interface RecordMeta {
 export interface WorkoutRecord extends RecordMeta {
   title: string
   startedAt: string
-  completedAt: null
+  completedAt: string | null
 }
 
 export interface ExerciseRecord extends RecordMeta { name: string }

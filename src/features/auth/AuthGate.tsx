@@ -43,9 +43,11 @@ export function AuthGate() {
       else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') { authVersion.current++; setGeneration((n) => n + 1) }
     })
     const refresh = () => { authVersion.current++; setGeneration((n) => n + 1) }
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') refresh() }
     window.addEventListener('online', refresh)
     window.addEventListener('offline', refresh)
-    return () => { subscription.unsubscribe(); window.removeEventListener('online', refresh); window.removeEventListener('offline', refresh) }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => { subscription.unsubscribe(); window.removeEventListener('online', refresh); window.removeEventListener('offline', refresh); document.removeEventListener('visibilitychange', refreshWhenVisible) }
   }, [])
 
   useEffect(() => {
@@ -173,7 +175,7 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
     {auth.kind === 'AUTH_RECHECK_REQUIRED' && <div className="auth-notice" role="alert">Сеанс нужно проверить онлайн. Локальные записи сохранены, отправка остановлена. <Button variant="quiet" onClick={onRecheck}>Повторить</Button></div>}
     {auth.kind === 'SIGNED_IN_OFFLINE_CACHED' && <div className="auth-notice" role="status">Офлайн: открыт локальный журнал этого аккаунта. Отправка остановлена.</div>}
     {error && <div className="auth-notice" role="alert">{error}</div>}
-    <div className="auth-notice" role={status.kind === 'error' ? 'alert' : 'status'}>{statusText(status)} {status.kind === 'error' && auth.kind === 'SIGNED_IN_ONLINE' && <Button variant="quiet" onClick={() => setRetry((n) => n + 1)}>Повторить</Button>}</div>
+    <div className="auth-notice" role={status.kind === 'error' ? 'alert' : 'status'}>{statusText(status)} {(status.kind === 'error' || status.kind === 'pending') && auth.kind === 'SIGNED_IN_ONLINE' && <Button variant="quiet" onClick={() => setRetry((n) => n + 1)}>{status.kind === 'error' ? 'Повторить' : 'Синхронизировать'}</Button>}</div>
     {ready ? <App repository={repository} authenticated onLocalWrite={() => void syncAfterWrite()} onDraftStateChange={(unsaved) => {
       setDraftUnsaved(unsaved)
       if (unsaved) setStatus((current) => current.kind === 'confirmed' ? { kind: 'pending', count: 0 } : current)

@@ -4,6 +4,7 @@ import { Button } from '../../shared/Button'
 import { SetRow } from './SetRow'
 
 interface Props {
+  name?: string
   sets: WorkoutSet[]
   newestId: string | null
   onChange: (id: string, field: SetField, value: string) => void
@@ -13,7 +14,7 @@ interface Props {
 
 const volumeFormatter = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
 
-export function ExerciseCard({ sets, newestId, onChange, onAdd, onDelete }: Props) {
+export function ExerciseCard({ name = 'Жим штанги лёжа', sets, newestId, onChange, onAdd, onDelete }: Props) {
   const newRepsRef = useRef<HTMLInputElement>(null)
   useEffect(() => { if (newestId) newRepsRef.current?.focus() }, [newestId])
   const incomplete = sets.some((set) => parseWeight(set.weight) === null || parseReps(set.reps) === null || parseReps(set.reps)! < 1 || parseReps(set.reps)! > 1000 || parseWeight(set.weight)! > 2000)
@@ -25,7 +26,7 @@ export function ExerciseCard({ sets, newestId, onChange, onAdd, onDelete }: Prop
           <path d="M8 24h32M12 16v16M17 13v22M31 13v22M36 16v16" />
         </svg>
       </div>
-      <div><p className="eyebrow">СИЛОВОЕ УПРАЖНЕНИЕ</p><h2 id="exercise-title">Жим штанги лёжа</h2></div>
+      <div><p className="eyebrow">СИЛОВОЕ УПРАЖНЕНИЕ</p><h2 id="exercise-title">{name}</h2></div>
     </div>
     <div className="exercise-card__summary">
       <div><span>Подходы</span><strong>{sets.length}</strong></div>

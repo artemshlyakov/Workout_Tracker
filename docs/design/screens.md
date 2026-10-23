@@ -29,6 +29,8 @@ Empty: `Добавьте первое упражнение`.
 
 Design intended: exercise picker, interval picker, `Лучший рабочий вес`, `Объём`, `Частота` metrics and readable chart. **Not part of plan 001.** Real charts only after sufficient stored records; no invented metrics. If no data: `Запишите несколько тренировок, чтобы увидеть прогресс`.
 
+Первый визуальный срез Plan 004 показывает фактический лучший вес, суммарный объём и результаты завершённых тренировок; при двух и более записях — простые полосы сравнения. Интервалы, частота и расширенные графики ещё не реализованы. Локальные снимки с тестовыми данными: `../screenshots/history-local-preview-390.png`, `../screenshots/exercises-local-preview-390.png`, `../screenshots/progress-local-preview-390.png`. Они не подтверждают браузерный Auth/offline/online сценарий.
+
 ## 5. Auth / account (Plan 003; mandatory for public version)
 
 Dedicated login with email + password. Signup screen **только для первичного onboarding при временно открытой серверной регистрации** (ADR 0007); после закрытия signup показывать `Регистрация временно закрыта`. Username/display name optional. Не рисовать работающие confirmation/reset до появления проверенной доставки email; объяснить пользователю ограничение по восстановлению пароля. Successful sign-in navigates to workout. First login requires internet. Signed-out visitors cannot see personal records. Sign-out hides previous local cache offline; warn if pending.

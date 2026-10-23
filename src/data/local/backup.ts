@@ -28,30 +28,30 @@ export function parseBackup(json: string): DevBackup {
       syncState.workspaceId !== DEV_WORKSPACE_ID || syncState.ownerUserId !== null ||
       syncState.cursor !== null || syncState.lastAckAt !== null) throw new Error('Чужая или повреждённая локальная область')
   const validCollections = [workouts, exercises, workoutExercises, exerciseSets].every((items) => items.every(validMeta) && unique(items, 'id'))
-  if (!validCollections || workouts.length !== 1 || exercises.length !== 1 || workoutExercises.length !== 1 ||
-      !workouts.every((item) => item.deletedAt === null && typeof item.title === 'string' && item.title.trim().length > 0 && item.title.length <= 60 && timestamp(item.startedAt) && item.completedAt === null) ||
-      !exercises.every((item) => item.deletedAt === null && item.name === 'Жим штанги лёжа') ||
-      !workoutExercises.every((item) => item.deletedAt === null && item.workoutId === workouts[0].id && item.exerciseId === exercises[0].id && item.position === 0) ||
-      !exerciseSets.every((item) => item.workoutExerciseId === workoutExercises[0].id && Number.isSafeInteger(item.position) && (item.position as number) >= 0 && Number.isSafeInteger(item.weightCentiKg) && (item.weightCentiKg as number) >= 0 && (item.weightCentiKg as number) <= 200000 && Number.isSafeInteger(item.reps) && (item.reps as number) >= 1 && (item.reps as number) <= 1000) ||
-      !unique(exerciseSets.filter((item) => item.deletedAt === null), 'position')) throw new Error('Повреждённые данные тренировки')
+  const workoutIds = new Set(workouts.map((item) => item.id))
+  const exerciseIds = new Set(exercises.map((item) => item.id))
+  const relationIds = new Set(workoutExercises.map((item) => item.id))
+  const validWorkout = (item: Record<string, unknown>) => item.deletedAt === null && typeof item.title === 'string' && item.title.trim().length > 0 && item.title.length <= 60 && timestamp(item.startedAt) && (item.completedAt === null || timestamp(item.completedAt) && Date.parse(item.completedAt) >= Date.parse(item.startedAt))
+  const validExercise = (item: Record<string, unknown>) => item.deletedAt === null && typeof item.name === 'string' && item.name.trim().length > 0 && item.name.length <= 120
+  const validRelation = (item: Record<string, unknown>) => item.deletedAt === null && workoutIds.has(item.workoutId) && exerciseIds.has(item.exerciseId) && Number.isSafeInteger(item.position) && (item.position as number) >= 0
+  const validSet = (item: Record<string, unknown>) => relationIds.has(item.workoutExerciseId) && Number.isSafeInteger(item.position) && (item.position as number) >= 0 && Number.isSafeInteger(item.weightCentiKg) && (item.weightCentiKg as number) >= 0 && (item.weightCentiKg as number) <= 200000 && Number.isSafeInteger(item.reps) && (item.reps as number) >= 1 && (item.reps as number) <= 1000
+  if (!validCollections || !workouts.length || !exercises.length || !workoutExercises.length ||
+      workouts.filter((item) => item.completedAt === null).length > 1 || !workouts.every(validWorkout) ||
+      !exercises.every(validExercise) || !workoutExercises.every(validRelation) || !exerciseSets.every(validSet) ||
+      new Set(exerciseSets.filter((item) => item.deletedAt === null).map((item) => `${item.workoutExerciseId}:${item.position}`)).size !== exerciseSets.filter((item) => item.deletedAt === null).length) throw new Error('Повреждённые данные тренировки')
   const knownEntities = new Map<string, string>([
-    [workouts[0].id as string, 'workout'], [exercises[0].id as string, 'exercise'],
-    [workoutExercises[0].id as string, 'workoutExercise'],
+    ...workouts.map((item): [string, string] => [item.id as string, 'workout']),
+    ...exercises.map((item): [string, string] => [item.id as string, 'exercise']),
+    ...workoutExercises.map((item): [string, string] => [item.id as string, 'workoutExercise']),
     ...exerciseSets.map((item): [string, string] => [item.id as string, 'exerciseSet']),
   ])
   const validSnapshot = (item: Record<string, unknown>): boolean => {
     const snapshot = item.snapshot
     if (!object(snapshot) || snapshot.id !== item.entityId || !validMeta(snapshot)) return false
-    if (item.entityType === 'workout') return typeof snapshot.title === 'string' && snapshot.title.trim().length > 0 &&
-      snapshot.title.length <= 60 && timestamp(snapshot.startedAt) && snapshot.completedAt === null
-    if (item.entityType === 'exercise') return snapshot.name === 'Жим штанги лёжа'
-    if (item.entityType === 'workoutExercise') return snapshot.workoutId === workouts[0].id &&
-      snapshot.exerciseId === exercises[0].id && snapshot.position === 0
-    return snapshot.workoutExerciseId === workoutExercises[0].id &&
-      Number.isSafeInteger(snapshot.position) && (snapshot.position as number) >= 0 &&
-      Number.isSafeInteger(snapshot.weightCentiKg) && (snapshot.weightCentiKg as number) >= 0 &&
-      (snapshot.weightCentiKg as number) <= 200000 && Number.isSafeInteger(snapshot.reps) &&
-      (snapshot.reps as number) >= 1 && (snapshot.reps as number) <= 1000
+    if (item.entityType === 'workout') return validWorkout(snapshot)
+    if (item.entityType === 'exercise') return validExercise(snapshot)
+    if (item.entityType === 'workoutExercise') return validRelation(snapshot)
+    return validSet(snapshot)
   }
   if (!unique(outbox, 'operationId') || !unique(outbox, 'sequence') || !outbox.every((item) =>
     Number.isSafeInteger(item.sequence) && (item.sequence as number) > 0 &&
