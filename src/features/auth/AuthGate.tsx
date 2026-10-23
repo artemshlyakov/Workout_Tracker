@@ -7,6 +7,7 @@ import { CloudSync, type PushResult } from '../../data/cloud/sync'
 import { DexieWorkoutRepository } from '../../data/local/DexieWorkoutRepository'
 import { WorkoutDatabase } from '../../data/local/schema'
 import { Button } from '../../shared/Button'
+import { ConflictPanel } from './ConflictPanel'
 import { AuthForm } from './AuthForm'
 
 export type SyncStatus =
@@ -25,7 +26,7 @@ export function statusText(status: SyncStatus): string {
   switch (status.kind) {
     case 'checking': return 'Проверяем облачное состояние…'
     case 'syncing': return 'Синхронизируем изменения…'
-    case 'confirmed': return 'Облако подтвердило все изменения'
+    case 'confirmed': return 'Синхронизировано'
     case 'pending': return status.count ? `${status.count} изменений ожидают отправки` : 'Облачное состояние ещё не проверено'
     case 'error': return `Синхронизация: ${status.message}. ${status.count} изменений ожидают отправки`
   }
@@ -83,6 +84,19 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
   const [error, setError] = useState<string | null>(null)
   const [draftUnsaved, setDraftUnsaved] = useState(false)
   const [retry, setRetry] = useState(0)
+  const [dataVersion, setDataVersion] = useState(0)
+  const retryAttempt = useRef(0)
+  const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const importFile = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
+
+  useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
+  useEffect(() => {
+    if (status.kind !== 'error' || auth.kind !== 'SIGNED_IN_ONLINE' || /[Кк]онфликт/.test(status.message) || retryAttempt.current >= 5) return
+    const delay = Math.min(30000, 2000 * 2 ** retryAttempt.current++) + Math.floor(Math.random() * 500)
+    const timer = setTimeout(() => setRetry((n) => n + 1), delay)
+    return () => clearTimeout(timer)
+  }, [status, auth.kind])
 
   useEffect(() => {
     let active = true
@@ -108,7 +122,13 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
         if (!maySync(auth, owner)) { setStatus({ kind: 'pending', count: pending }); return }
         setStatus({ kind: 'syncing' })
         const result = await sync.push()
-        if (active && revision === statusRevision.current) setStatus(completedStatus(result, cloudChecked.current))
+        const pulled = await sync.prepare()
+        if (active && revision === statusRevision.current) {
+          cloudChecked.current = cloudChecked.current || pulled.cloudChecked
+          if (pulled.cloudChecked) setDataVersion((value) => value + 1)
+          setStatus(completedStatus(result, cloudChecked.current))
+          retryAttempt.current = 0
+        }
       } catch (cause) {
         if (!active || revision !== statusRevision.current) return
         const count = await sync.pendingCount().catch(() => 0)
@@ -131,7 +151,13 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
     setStatus({ kind: 'syncing' })
     try {
       const result = await sync.push()
-      if (syncRef.current === sync && revision === statusRevision.current) setStatus(completedStatus(result, cloudChecked.current))
+      const pulled = await sync.prepare()
+      if (syncRef.current === sync && revision === statusRevision.current) {
+        cloudChecked.current = cloudChecked.current || pulled.cloudChecked
+        if (pulled.cloudChecked) setDataVersion((value) => value + 1)
+        setStatus(completedStatus(result, cloudChecked.current))
+        retryAttempt.current = 0
+      }
     } catch (cause) {
       if (syncRef.current === sync && revision === statusRevision.current) {
         const count = await sync.pendingCount()
@@ -166,19 +192,36 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось экспортировать данные') }
   }
 
+  async function handleImport(file?: File) {
+    if (!file) return
+    if (draftUnsaved) { setError('Сначала сохраните или удалите незаполненные подходы'); return }
+    if (!window.confirm('Восстановить копию? Тренировки будут добавлены с новыми идентификаторами и пометкой «копия». Текущие записи и очередь сохранятся.')) return
+    setImporting(true)
+    try {
+      const count = await repository.importAccountData(await file.text())
+      setError(null); setDataVersion((value) => value + 1)
+      setStatus({ kind: 'pending', count: await syncRef.current?.pendingCount() ?? count })
+      void syncAfterWrite()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось восстановить копию') }
+    finally { setImporting(false); if (importFile.current) importFile.current.value = '' }
+  }
+
   return <>
-    <div className="account-bar">
-      <span>{auth.user.email ?? 'Личный аккаунт'}</span>
-      <Button variant="quiet" onClick={() => void handleExport()}>Экспорт</Button>
-      <Button variant="quiet" onClick={() => void handleSignOut()}>Выйти</Button>
-    </div>
+    <details className="account-settings">
+      <summary><span className="brand-mark">W<span> / </span>T</span><span>Аккаунт и данные</span><span aria-hidden="true">⌄</span></summary>
+      <div className="account-settings__body"><strong>{auth.user.email ?? 'Личный аккаунт'}</strong><p>На iPhone: Safari → «Поделиться» → «На экран Домой». Для первого входа нужен интернет.</p><div className="backup-actions">
+        <Button variant="quiet" onClick={() => void handleExport()}>Экспорт JSON</Button>
+        <Button variant="quiet" disabled={importing} onClick={() => importFile.current?.click()}>{importing ? 'Восстановление…' : 'Восстановить копию'}</Button>
+      </div><input ref={importFile} type="file" accept="application/json,.json" className="visually-hidden" aria-label="Выбрать личную резервную копию" onChange={(event) => void handleImport(event.target.files?.[0])} /><p>Экспорт содержит записанные тренировки. Незавершённый ввод хранится отдельно на устройстве.</p><Button variant="quiet" onClick={() => void handleSignOut()}>Выйти из аккаунта</Button></div>
+    </details>
     {auth.kind === 'AUTH_RECHECK_REQUIRED' && <div className="auth-notice" role="alert">Сеанс нужно проверить онлайн. Локальные записи сохранены, отправка остановлена. <Button variant="quiet" onClick={onRecheck}>Повторить</Button></div>}
-    {auth.kind === 'SIGNED_IN_OFFLINE_CACHED' && <div className="auth-notice" role="status">Офлайн: открыт локальный журнал этого аккаунта. Отправка остановлена.</div>}
+    {auth.kind === 'SIGNED_IN_OFFLINE_CACHED' && <div className="auth-notice" role="status">Офлайн · записи сохраняются на устройстве</div>}
     {error && <div className="auth-notice" role="alert">{error}</div>}
-    <div className="auth-notice" role={status.kind === 'error' ? 'alert' : 'status'}>{statusText(status)} {(status.kind === 'error' || status.kind === 'pending') && auth.kind === 'SIGNED_IN_ONLINE' && <Button variant="quiet" onClick={() => setRetry((n) => n + 1)}>{status.kind === 'error' ? 'Повторить' : 'Синхронизировать'}</Button>}</div>
-    {ready ? <App repository={repository} authenticated onLocalWrite={() => void syncAfterWrite()} onDraftStateChange={(unsaved) => {
-      setDraftUnsaved(unsaved)
-      if (unsaved) setStatus((current) => current.kind === 'confirmed' ? { kind: 'pending', count: 0 } : current)
-    }} /> : <main className="app-shell"><p role="status">Загружаем личный журнал…</p></main>}
+    <div className={`sync-strip sync-strip--${status.kind}`} role={status.kind === 'error' ? 'alert' : 'status'}><span>{statusText(status)}</span>{auth.kind === 'SIGNED_IN_ONLINE' && <Button variant="quiet" disabled={status.kind === 'syncing' || status.kind === 'checking'} onClick={() => { retryAttempt.current = 0; setRetry((n) => n + 1) }}>{status.kind === 'error' ? 'Повторить' : 'Синхронизировать'}</Button>}</div>
+    {status.kind === 'error' && /[Кк]онфликт/.test(status.message) && syncRef.current && <ConflictPanel sync={syncRef.current} onExport={() => void handleExport()} onResolved={() => { setDataVersion((value) => value + 1); setRetry((value) => value + 1) }} />}
+    {ready ? <App repository={repository} authenticated refreshToken={dataVersion} onLocalWrite={() => {
+      if (writeTimer.current) clearTimeout(writeTimer.current)
+      writeTimer.current = setTimeout(() => void syncAfterWrite(), 250)
+    }} onDraftStateChange={setDraftUnsaved} /> : <main className="app-shell"><p role="status">Загружаем личный журнал…</p></main>}
   </>
 }

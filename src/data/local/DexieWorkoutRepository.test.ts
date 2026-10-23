@@ -101,3 +101,75 @@ describe('multi-exercise workout repository', () => {
     legacy.db.close(); await legacy.db.delete(); restored.db.close(); await restored.db.delete()
   })
 })
+
+describe('personal diary reliability', () => {
+  it('persists incomplete input separately without generating fictitious sets or operations', async () => {
+    const workoutId = await start(); const relation = await add('Жим')
+    const pending = await db.outbox.toArray()
+    const draft = { workoutId, title: 'Черновик', dirty: true, rows: { [relation]: [{ id: id(), weight: '80', reps: '', saved: false, dirty: true, position: 0 }] }, restUntil: Date.now() + 90000 }
+    await repository.saveDraft(draft)
+    db.close()
+    const reopened = new DexieWorkoutRepository(new WorkoutDatabase(db.name), { ownerUserId: owner })
+    expect(await reopened.loadDraft()).toEqual(draft)
+    expect((await reopened.load()).exercises[0].sets).toEqual([])
+    expect(await reopened.db.outbox.toArray()).toEqual(pending)
+    reopened.db.close()
+  })
+
+  it('creates a routine atomically, reorders exercises, and deletes children before parents', async () => {
+    await repository.apply({ kind: 'startWorkout', operationId: id(), workoutId: id(), title: 'Всё тело', exerciseNames: ['Жим', 'Тяга', 'Присед'] })
+    let view = await repository.load()
+    expect(view.exercises.map((row) => row.sets)).toEqual([[], [], []])
+    await set(view.exercises[0].relationId)
+    await repository.apply({ kind: 'moveExercise', operationId: id(), relationId: view.exercises[0].relationId, direction: 1 })
+    view = await repository.load()
+    expect(view.exercises.map((row) => row.name)).toEqual(['Тяга', 'Жим', 'Присед'])
+    await repository.apply({ kind: 'removeExercise', operationId: id(), relationId: view.exercises[1].relationId })
+    expect((await db.outbox.toArray()).slice(-2).map((row) => [row.entityType, row.action])).toEqual([['exerciseSet', 'delete'], ['workoutExercise', 'delete']])
+    await repository.apply({ kind: 'discardWorkout', operationId: id() })
+    expect((await repository.listJournal()).workouts).toEqual([])
+    expect((await db.outbox.toArray()).at(-1)?.entityType).toBe('workout')
+    expect(await db.exercises.count()).toBe(3)
+  })
+
+  it('reopens and completes an old session without moving its completion to today', async () => {
+    const workoutId = await start(); const relation = await add('Жим'); await set(relation)
+    await repository.apply({ kind: 'finishWorkout', operationId: id() })
+    const completed = (await repository.listJournal()).workouts[0].completedAt
+    await repository.apply({ kind: 'reopenWorkout', operationId: id(), workoutId })
+    await set(relation, '85', '8', 1)
+    await repository.apply({ kind: 'finishWorkout', operationId: id() })
+    const result = (await repository.listJournal()).workouts[0]
+    expect(result.completedAt).toBe(completed)
+    expect(result.exercises[0].sets).toHaveLength(2)
+  })
+
+  it('restores as new copies and preserves all original records and pending operations', async () => {
+    const original = await start(); const relation = await add('Жим'); await set(relation)
+    await repository.apply({ kind: 'finishWorkout', operationId: id() })
+    const backup = await repository.exportAccountData()
+    const pending = await db.outbox.toArray()
+    expect(await repository.importAccountData(backup)).toBe(1)
+    const journal = await repository.listJournal()
+    expect(journal.workouts).toHaveLength(2)
+    expect(journal.workouts.find((row) => row.id === original)?.exercises[0].sets).toHaveLength(1)
+    expect(journal.workouts.find((row) => row.id !== original)?.exercises[0].sets).toHaveLength(1)
+    const after = await db.outbox.toArray()
+    expect(after.slice(0, pending.length)).toEqual(pending)
+    expect(after.slice(pending.length).map((row) => row.entityType)).toEqual(['workout', 'workoutExercise', 'exerciseSet'])
+    await expect(repository.importAccountData(backup)).rejects.toThrow('уже восстановлена')
+    const foreign = JSON.parse(backup); foreign.ownerUserId = id()
+    await expect(repository.importAccountData(JSON.stringify(foreign))).rejects.toThrow()
+    expect(await db.outbox.toArray()).toEqual(after)
+  })
+
+  it('rolls back an entire import when its new outbox operation fails', async () => {
+    await start(); const relation = await add('Жим'); await set(relation)
+    await repository.apply({ kind: 'finishWorkout', operationId: id() })
+    const backup = await repository.exportAccountData(), before = await db.outbox.toArray()
+    vi.spyOn(db.outbox, 'add').mockRejectedValueOnce(new Error('disk full'))
+    await expect(repository.importAccountData(backup)).rejects.toThrow('disk full')
+    expect((await repository.listJournal()).workouts).toHaveLength(1)
+    expect(await db.outbox.toArray()).toEqual(before)
+  })
+})

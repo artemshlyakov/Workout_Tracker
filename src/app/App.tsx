@@ -1,137 +1,183 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { parseReps, parseWeight } from '../domain/workout'
+import { localDay, previousExercise } from '../domain/history'
 import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView } from '../data/ports/WorkoutRepository'
 import { Button } from '../shared/Button'
-import { ExercisesScreen, HistoryScreen, ProgressScreen } from '../features/journal/JournalScreens'
+import { ProgressScreen } from '../features/journal/JournalScreens'
+import { CalendarHistory } from '../features/journal/CalendarHistory'
+import { ExerciseImage, ExerciseLibrary } from '../features/library/ExerciseLibrary'
+import { exerciseInfo, starterRoutines } from '../data/catalog/library'
+import { RestTimer } from '../features/workout/RestTimer'
 
 type Tab = 'workout' | 'history' | 'exercises' | 'progress'
 type Draft = { id: string; weight: string; reps: string; position: number; saved: boolean; dirty: boolean }
-interface Props { repository: WorkoutRepository; authenticated?: boolean; onLocalWrite?: () => void; onDraftStateChange?: (unsaved: boolean) => void }
+interface Props { repository: WorkoutRepository; authenticated?: boolean; onLocalWrite?: () => void; onDraftStateChange?: (unsaved: boolean) => void; refreshToken?: number }
 const uuid = () => crypto.randomUUID()
-const message = (cause: unknown) => cause instanceof Error ? cause.message : 'неизвестная ошибка'
+const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Неизвестная ошибка'
 const valid = (set: Draft) => { const weight = parseWeight(set.weight), reps = parseReps(set.reps); return weight !== null && weight <= 2000 && reps !== null && reps >= 1 && reps <= 1000 }
-const fromView = (view: WorkoutView): Record<string, Draft[]> => Object.fromEntries(view.exercises.map((exercise) => [exercise.relationId, exercise.sets.map((set) => ({ ...set, saved: true, dirty: false }))]))
+function rowsFrom(view: WorkoutView, existing: Record<string, Draft[]> = {}): Record<string, Draft[]> {
+  return Object.fromEntries(view.exercises.map((exercise) => {
+    const pending = (existing[exercise.relationId] ?? []).filter((set) => set.dirty)
+    const saved = exercise.sets.map((set) => {
+      const draft = pending.find((item) => item.id === set.id)
+      return draft && (draft.weight !== set.weight || draft.reps !== set.reps) ? { ...draft, saved: true } : { ...set, saved: true, dirty: false }
+    })
+    return [exercise.relationId, [...saved, ...pending.filter((set) => !set.saved && !saved.some((item) => item.id === set.id))]]
+  }))
+}
+const initialTab = (): Tab => { const value = location.hash.slice(2); return ['history', 'exercises', 'progress'].includes(value) ? value as Tab : 'workout' }
 
-export function App({ repository, authenticated = false, onLocalWrite, onDraftStateChange }: Props) {
+export function App({ repository, authenticated = false, onLocalWrite, onDraftStateChange, refreshToken = 0 }: Props) {
   const [view, setView] = useState<WorkoutView | null>(null)
+  const viewRef = useRef<WorkoutView | null>(null)
+  useEffect(() => { viewRef.current = view }, [view])
+  useEffect(() => { window.dispatchEvent(new CustomEvent('workout-active', { detail: Boolean(view?.active) })); return () => { window.dispatchEvent(new CustomEvent('workout-active', { detail: false })) } }, [view?.active])
   const [drafts, setDrafts] = useState<Record<string, Draft[]>>({})
   const [title, setTitle] = useState('')
   const [newTitle, setNewTitle] = useState('')
-  const [exerciseName, setExerciseName] = useState('')
   const [picker, setPicker] = useState(false)
-  const [tab, setTab] = useState<Tab>('workout')
-  const [journal, setJournal] = useState<JournalView | null>(null)
+  const [tab, setTab] = useState<Tab>(initialTab)
+  const [journal, setJournal] = useState<JournalView>({ workouts: [], exercises: [] })
   const [busy, setBusy] = useState(false)
+  const lock = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [restUntil, setRestUntil] = useState<number | null>(null)
   const [removed, setRemoved] = useState<{ relationId: string; draft: Draft } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const date = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }).format(new Date())
+  const unsaved = Boolean(view?.active && (title !== view.title || Object.values(drafts).some((rows) => rows.some((row) => row.dirty))))
+  const changeTab = (next: Tab) => { setPicker(false); setTab(next); history.replaceState(null, '', `#/${next}`); window.scrollTo({ top: 0 }) }
 
-  const refresh = useCallback(async (preserveDrafts = false) => {
+  const refresh = useCallback(async (preserve = true) => {
     const next = await repository.load()
-    if (!preserveDrafts) setRemoved(null)
     setView(next)
-    setTitle((current) => preserveDrafts && current.trim() ? current : next.title)
-    setDrafts((current) => {
-      const loaded = fromView(next)
-      if (preserveDrafts) for (const relationId of Object.keys(loaded)) {
-        const pending = (current[relationId] ?? []).filter((draft) => draft.dirty)
-        loaded[relationId] = loaded[relationId].map((item) => pending.find((draft) => draft.id === item.id) ?? item)
-          .concat(pending.filter((draft) => !draft.saved && !loaded[relationId].some((item) => item.id === draft.id)))
-      }
-      return loaded
-    })
+    setTitle((current) => preserve && viewRef.current?.workoutId === next.workoutId && current !== viewRef.current?.title ? current : next.title)
+    setDrafts((current) => rowsFrom(next, preserve ? current : {}))
+    if (!preserve) { setRemoved(null); setRestUntil(null) }
     setJournal(await repository.listJournal())
   }, [repository])
 
-  useEffect(() => { let active = true; refresh().catch((cause: unknown) => { if (active) setError(message(cause)) }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [refresh])
-  const unsaved = Boolean(view?.active && (title.trim() !== view.title || Object.values(drafts).some((sets) => sets.some((set) => set.dirty))))
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const next = await repository.load(), savedDraft = await repository.loadDraft(), nextJournal = await repository.listJournal()
+        if (!active) return
+        const draft = savedDraft?.workoutId === next.workoutId ? savedDraft : null
+        setView(next); setTitle(draft?.titleDirty ? draft.title : next.title); setDrafts(rowsFrom(next, draft?.rows)); setRestUntil(draft?.restUntil ?? null); setJournal(nextJournal)
+      } catch (cause) { if (active) setError(message(cause)) }
+      finally { if (active) setLoading(false) }
+    })()
+    return () => { active = false }
+  }, [repository])
+  useEffect(() => { if (refreshToken > 0) void refresh(true).catch((cause: unknown) => setError(message(cause))) }, [refreshToken, refresh])
   useEffect(() => { onDraftStateChange?.(unsaved || busy) }, [unsaved, busy, onDraftStateChange])
+  useEffect(() => {
+    if (loading || !view) return
+    void repository.saveDraft(view.active && view.workoutId ? { workoutId: view.workoutId, title, titleDirty: title !== view.title, dirty: unsaved, rows: drafts, restUntil } : null)
+      .catch(() => setError('Не удалось сохранить черновик. Не закрывайте приложение до сохранения подходов.'))
+  }, [drafts, title, restUntil, view, loading, repository, unsaved])
 
-  async function apply(command: WorkoutCommand, preserveDrafts = false) {
-    setBusy(true); setError(null); setNotice(null)
-    try { await repository.apply(command); onLocalWrite?.(); await refresh(preserveDrafts); return true }
-    catch (cause) { setError(message(cause)); return false }
-    finally { setBusy(false) }
+  async function apply(command: WorkoutCommand, preserve = true) {
+    if (lock.current) return false
+    lock.current = true; setBusy(true); setError(null); setNotice(null)
+    try {
+      await repository.apply(command)
+      await refresh(preserve)
+      if (command.kind === 'rename') setTitle(command.title.trim())
+      onLocalWrite?.()
+      return true
+    } catch (cause) { setError(message(cause)); return false }
+    finally { lock.current = false; setBusy(false) }
   }
-  function addDraft(relationId: string) {
+  async function start(name: string, exerciseNames: readonly string[] = []) {
+    if (await apply({ kind: 'startWorkout', operationId: uuid(), workoutId: uuid(), title: name, exerciseNames: [...exerciseNames] }, false)) { setNewTitle(''); changeTab('workout') }
+  }
+  function addDraft(relationId: string, exerciseId: string) {
+    const last = previousExercise(journal.workouts, exerciseId)
     setDrafts((current) => {
-      const list = current[relationId] ?? []
-      const previous = [...list].reverse().find((set) => parseWeight(set.weight) !== null)
-      return { ...current, [relationId]: [...list, { id: uuid(), weight: previous?.weight ?? '', reps: '', position: Math.max(-1, ...list.map((set) => set.position)) + 1, saved: false, dirty: true }] }
+      const rows = current[relationId] ?? []
+      if (rows.some((row) => !row.saved && !row.weight && !row.reps)) return current
+      const previous = [...rows].reverse().find((set) => parseWeight(set.weight) !== null)
+      const previousWeight = last?.sets[rows.length]?.weight ?? last?.sets.at(-1)?.weight
+      return { ...current, [relationId]: [...rows, { id: uuid(), weight: previous?.weight ?? (previousWeight === undefined ? '' : String(previousWeight).replace('.', ',')), reps: '', position: Math.max(-1, ...rows.map((set) => set.position)) + 1, saved: false, dirty: true }] }
     })
+    setRemoved(null)
   }
   function editDraft(relationId: string, id: string, field: 'weight' | 'reps', value: string) {
     setDrafts((current) => ({ ...current, [relationId]: current[relationId].map((set) => set.id === id ? { ...set, [field]: value, dirty: true } : set) }))
   }
-  async function saveDraft(relationId: string, draft: Draft) {
-    if (!valid(draft)) { setError('Укажите вес от 0 до 2000 кг и повторы от 1 до 1000'); return }
-    const ok = await apply({ kind: 'saveSet', operationId: uuid(), id: draft.id, relationId, weight: draft.weight, reps: draft.reps, position: draft.position }, true)
-    if (ok) setDrafts((current) => ({ ...current, [relationId]: current[relationId].map((set) => set.id === draft.id ? { ...set, saved: true, dirty: false } : set) }))
-  }
-  async function deleteDraft(relationId: string, draft: Draft) {
-    if (!draft.saved) { setDrafts((current) => ({ ...current, [relationId]: current[relationId].filter((set) => set.id !== draft.id) })); return }
-    if (await apply({ kind: 'deleteSet', operationId: uuid(), id: draft.id, relationId }, true)) setRemoved({ relationId, draft })
-  }
-  async function addExercise(exerciseId: string) {
-    if (await apply({ kind: 'addExercise', operationId: uuid(), relationId: uuid(), exerciseId }, true)) setPicker(false)
-  }
-  async function createExercise() {
-    const name = exerciseName.trim()
-    if (!name) { setError('Введите название упражнения'); return }
-    const exerciseId = uuid()
-    if (await apply({ kind: 'createExercise', operationId: uuid(), exerciseId, name }, true)) {
-      setExerciseName('')
-      if (view?.active) await addExercise(exerciseId)
+  async function saveRow(relationId: string, draft: Draft) {
+    if (!valid(draft)) return
+    if (await apply({ kind: 'saveSet', operationId: uuid(), id: draft.id, relationId, weight: draft.weight, reps: draft.reps, position: draft.position })) {
+      setDrafts((current) => ({ ...current, [relationId]: current[relationId].map((set) => set.id === draft.id ? { ...set, saved: true, dirty: false } : set) }))
+      if (!draft.saved) setRestUntil(Date.now() + 90000)
     }
   }
-  async function exportData() {
-    try {
-      const json = await repository.exportData()
-      const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
-      const link = document.createElement('a'); link.href = url; link.download = 'workout-tracker-dev-backup.json'; link.click()
-      setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice('Копия скачана')
-    } catch (cause) { setError(message(cause)) }
+  async function deleteRow(relationId: string, draft: Draft) {
+    if (!draft.saved) { setDrafts((current) => ({ ...current, [relationId]: current[relationId].filter((set) => set.id !== draft.id) })); return }
+    const saved = view?.exercises.find((item) => item.relationId === relationId)?.sets.find((item) => item.id === draft.id)
+    if (await apply({ kind: 'deleteSet', operationId: uuid(), id: draft.id, relationId })) setRemoved({ relationId, draft: { ...draft, ...saved } })
   }
-  async function importData(file?: File) {
-    if (!file || !window.confirm('Импорт заменит все локальные тестовые данные. Продолжить?')) return
-    try { await repository.importData(await file.text()); await refresh(); setNotice('Данные восстановлены') }
+  async function chooseExercise(name: string) {
+    let exerciseId = journal.exercises.find((item) => item.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'))?.id
+    if (!exerciseId) {
+      exerciseId = uuid()
+      if (!await apply({ kind: 'createExercise', operationId: uuid(), exerciseId, name })) return false
+    }
+    if (view?.active) {
+      if (view.exercises.some((item) => item.exerciseId === exerciseId)) { setNotice('Упражнение уже в тренировке'); setPicker(false); changeTab('workout'); return true }
+      if (!await apply({ kind: 'addExercise', operationId: uuid(), relationId: uuid(), exerciseId })) return false
+      setPicker(false); changeTab('workout')
+    } else setNotice('Упражнение добавлено в личный каталог')
+    return true
+  }
+  async function exportDev() {
+    try { const url = URL.createObjectURL(new Blob([await repository.exportData()], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = 'workout-tracker-dev-backup.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
     catch (cause) { setError(message(cause)) }
-    finally { if (fileRef.current) fileRef.current.value = '' }
   }
-
-  if (tab !== 'workout') return <><main className="app-shell app-shell--with-nav">
-    {!journal ? <p role="status">Загружаем журнал…</p> : tab === 'history' ? <HistoryScreen journal={journal} /> : tab === 'exercises' ? <ExercisesScreen journal={journal} /> : <ProgressScreen journal={journal} />}
-  </main><BottomNav tab={tab} onChange={setTab} /></>
-
+  async function importDev(file?: File) {
+    if (!file || !window.confirm('Заменить локальные тестовые данные резервной копией?')) return
+    try { await repository.importData(await file.text()); await refresh(false) } catch (cause) { setError(message(cause)) }
+  }
   const savedCount = view?.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0) ?? 0
-  const catalog = (journal?.exercises ?? []).filter((exercise) => !view?.exercises.some((item) => item.exerciseId === exercise.id))
+  const volume = view?.exercises.reduce((sum, exercise) => sum + exercise.sets.reduce((total, set) => total + (parseWeight(set.weight) ?? 0) * (parseReps(set.reps) ?? 0), 0), 0) ?? 0
+  const date = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }).format(new Date(view?.startedAt ?? Date.now()))
   return <><main className="app-shell app-shell--with-nav">
-    <header className="page-header"><div className="header-kicker"><span className="live-dot" aria-hidden="true" /> ЖУРНАЛ ТРЕНИРОВОК</div><h1>Тренировка</h1><p className="date-line">{date}</p></header>
-    {loading ? <p role="status">Загружаем тренировку…</p> : <>
-      {error && <div role="alert" className="load-error">{error}</div>}
-      {notice && <p role="status" className="backup-notice">{notice}</p>}
-      {!view?.active ? <section className="empty-panel start-panel"><p className="eyebrow">НОВАЯ ТРЕНИРОВКА</p><h2>Начнём с названия</h2><p>Упражнения и подходы добавите после начала.</p><label htmlFor="new-workout-title">Название тренировки</label><input id="new-workout-title" className="search-input" maxLength={60} placeholder="Например, Спина и бицепс" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} /><Button disabled={busy || !newTitle.trim()} onClick={() => void (async () => { if (await apply({ kind: 'startWorkout', operationId: uuid(), workoutId: uuid(), title: newTitle })) setNewTitle('') })()}>Начать тренировку</Button></section> : <>
-        <section className="workout-title-card" aria-label="Название тренировки"><label htmlFor="workout-title">НАЗВАНИЕ ТРЕНИРОВКИ</label><div className="title-edit"><input id="workout-title" maxLength={60} value={title} onChange={(event) => setTitle(event.target.value)} /><Button variant="quiet" disabled={busy || !title.trim() || title === view.title} onClick={() => void apply({ kind: 'rename', operationId: uuid(), title }, true)}>Сохранить</Button></div></section>
-        <div className="workout-summary"><span>{view.exercises.length} упр.</span><span>{savedCount} сохранённых подходов</span></div>
-        {view.exercises.map((exercise, exerciseIndex) => <section key={exercise.relationId} className="exercise-card multi-exercise-card" aria-labelledby={`exercise-${exercise.relationId}`}>
-          <div className="exercise-card__heading"><div className="exercise-icon" aria-hidden="true">✦</div><div><p className="eyebrow">УПРАЖНЕНИЕ {String(exerciseIndex + 1).padStart(2, '0')}</p><h2 id={`exercise-${exercise.relationId}`}>{exercise.name}</h2></div></div>
-          <div className="sets-heading"><h3>Подходы</h3><span>Вес × повторы</span></div>
-          {(drafts[exercise.relationId] ?? []).length === 0 ? <p className="empty-note">Добавьте первый подход.</p> : <ol className="sets-list">{drafts[exercise.relationId].map((set, index) => <li key={set.id} className="set-row set-row--editable"><span className="set-number">{String(index + 1).padStart(2, '0')}</span><label className="numeric-field"><span>Вес, кг</span><input inputMode="decimal" aria-label={`${exercise.name}, подход ${index + 1}, вес`} value={set.weight} onChange={(event) => editDraft(exercise.relationId, set.id, 'weight', event.target.value)} /></label><label className="numeric-field"><span>Повторы</span><input inputMode="numeric" aria-label={`${exercise.name}, подход ${index + 1}, повторы`} value={set.reps} onChange={(event) => editDraft(exercise.relationId, set.id, 'reps', event.target.value)} /></label><Button variant="quiet" className="delete-button" disabled={busy} aria-label={`Удалить подход ${index + 1} — ${exercise.name}`} onClick={() => void deleteDraft(exercise.relationId, set)}>×</Button>{set.dirty && <Button className="set-save" disabled={busy || !valid(set)} onClick={() => void saveDraft(exercise.relationId, set)}>Сохранить подход</Button>}</li>)}</ol>}
-          <Button className="add-button" disabled={busy} onClick={() => addDraft(exercise.relationId)}><span aria-hidden="true">＋</span> Добавить подход</Button>
-        </section>)}
-        <Button className="add-exercise-button" variant="quiet" onClick={() => setPicker((current) => !current)}>＋ Добавить упражнение</Button>
-        {picker && <section className="exercise-picker" aria-label="Выбрать упражнение"><h2>Каталог упражнений</h2>{catalog.length ? <div className="picker-list">{catalog.map((exercise) => <Button key={exercise.id} variant="quiet" disabled={busy} onClick={() => void addExercise(exercise.id)}>{exercise.name} <span aria-hidden="true">＋</span></Button>)}</div> : <p className="empty-note">Свободных упражнений пока нет.</p>}<label htmlFor="custom-exercise">Своё упражнение</label><div className="picker-create"><input id="custom-exercise" className="search-input" maxLength={120} placeholder="Название упражнения" value={exerciseName} onChange={(event) => setExerciseName(event.target.value)} /><Button disabled={busy || !exerciseName.trim()} onClick={() => void createExercise()}>Создать</Button></div></section>}
-        {removed && <div className="undo-panel" role="status">Подход удалён <Button variant="quiet" disabled={busy} onClick={() => void (async () => { const { relationId, draft } = removed; if (await apply({ kind: 'saveSet', operationId: uuid(), id: uuid(), relationId, weight: draft.weight, reps: draft.reps, position: draft.position }, true)) setRemoved(null) })()}>Отменить</Button></div>}
-        <Button className="finish-button" variant="quiet" disabled={busy || savedCount === 0 || unsaved} onClick={() => void (async () => { if (await apply({ kind: 'finishWorkout', operationId: uuid() })) { setPicker(false); setTab('history') } })()}>Завершить тренировку</Button>
+    {error && <div role="alert" className="load-error">{error} {!view && <Button onClick={() => void refresh(false)}>Повторить</Button>}</div>}
+    {notice && <p role="status" className="backup-notice">{notice}</p>}
+    {loading ? <p role="status">Открываем ваш журнал…</p> : picker || tab === 'exercises' ? <ExerciseLibrary journal={journal} busy={busy} onChoose={chooseExercise} onClose={picker ? () => setPicker(false) : undefined} /> : tab === 'history' ? <CalendarHistory journal={journal} busy={busy} canStart={!view?.active} onRepeat={(workout) => void start(workout.title, workout.exercises.map((item) => item.name))} onEdit={(workoutId) => void (async () => { if (await apply({ kind: 'reopenWorkout', operationId: uuid(), workoutId }, false)) changeTab('workout') })()} /> : tab === 'progress' ? <ProgressScreen journal={journal} /> : <>
+      <header className="page-header"><div className="header-kicker"><span className="live-dot" /> ВАШ ЛИЧНЫЙ ПРОГРЕСС</div><h1>Тренировка</h1><p className="date-line">{date}</p></header>
+      {!view?.active ? <>
+        <section className="start-hero"><span className="hero-mark" aria-hidden="true">↗</span><p className="eyebrow">СЛЕДУЮЩИЙ ШАГ — ВАШ</p><h2>Сильнее с каждой тренировкой.</h2><p>Начните с чистого листа или повторите знакомый состав.</p><form onSubmit={(event) => { event.preventDefault(); void start(newTitle) }}><label htmlFor="new-workout-title">Название тренировки</label><input id="new-workout-title" className="search-input" maxLength={60} placeholder="Например, Спина и бицепс" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} required /><Button disabled={busy || !newTitle.trim()} className="add-button">＋ Начать тренировку</Button></form></section>
+        {journal.workouts.find((item) => item.completedAt) && <section className="recent-workout"><p className="eyebrow">ПОВТОРИТЬ ПОСЛЕДНЮЮ</p><h2>{journal.workouts.find((item) => item.completedAt)!.title}</h2><p>Состав сохранён. Подходы запишете заново.</p><Button variant="quiet" disabled={busy} onClick={() => { const last = journal.workouts.find((item) => item.completedAt)!; void start(last.title, last.exercises.map((exercise) => exercise.name)) }}>Начать с этим составом →</Button></section>}
+        <h2 className="screen-subtitle">Быстрый старт</h2><p className="empty-note">Примеры состава. Выберите подходящие упражнения и нагрузку самостоятельно.</p><div className="routine-grid">{starterRoutines.map((routine, index) => <button key={routine.name} disabled={busy} className="routine-card" onClick={() => { setNewTitle(routine.name); if (window.confirm(`Начать «${routine.name}»? Упражнения можно изменить во время тренировки.`)) void start(routine.name, routine.names) }}><span>0{index + 1}</span><strong>{routine.name}</strong><small>{routine.subtitle}</small><b aria-hidden="true">↗</b></button>)}</div>
+      </> : <>
+        <section className="workout-title-card"><label htmlFor="workout-title">СЕГОДНЯШНЯЯ ЦЕЛЬ</label><div className="title-edit"><input id="workout-title" maxLength={60} aria-label="Название тренировки" disabled={busy} value={title} onChange={(event) => setTitle(event.target.value)} />{title !== view.title && <Button variant="quiet" disabled={busy || !title.trim()} onClick={() => void apply({ kind: 'rename', operationId: uuid(), title })}>Готово</Button>}</div><div className="workout-summary"><span>{view.exercises.length} упр.</span><span>{savedCount} подх.</span><span>{new Intl.NumberFormat('ru-RU').format(volume)} кг</span></div></section>
+        <RestTimer until={restUntil} onChange={setRestUntil} />
+        {!view.exercises.length && <div className="empty-panel"><strong>Добавьте первое упражнение</strong><p>Выберите движение из библиотеки или создайте своё.</p></div>}
+        {view.exercises.map((exercise, exerciseIndex) => {
+          const previous = previousExercise(journal.workouts, exercise.exerciseId)
+          return <section key={exercise.relationId} className="exercise-card multi-exercise-card" aria-labelledby={`exercise-${exercise.relationId}`}>
+            <div className="exercise-card__heading"><ExerciseImage exercise={exerciseInfo(exercise.name)} /><div><p className="eyebrow">УПРАЖНЕНИЕ {String(exerciseIndex + 1).padStart(2, '0')}</p><h2 id={`exercise-${exercise.relationId}`}>{exercise.name}</h2></div></div>
+            <details className="exercise-options"><summary aria-label={`Действия — ${exercise.name}`}>Действия</summary><div><Button variant="quiet" disabled={busy || exerciseIndex === 0} onClick={() => void apply({ kind: 'moveExercise', operationId: uuid(), relationId: exercise.relationId, direction: -1 })}>↑ Выше</Button><Button variant="quiet" disabled={busy || exerciseIndex === view.exercises.length - 1} onClick={() => void apply({ kind: 'moveExercise', operationId: uuid(), relationId: exercise.relationId, direction: 1 })}>↓ Ниже</Button><Button variant="quiet" disabled={busy} onClick={() => { if (window.confirm(`Удалить «${exercise.name}» и его подходы из этой тренировки?`)) void apply({ kind: 'removeExercise', operationId: uuid(), relationId: exercise.relationId }) }}>Удалить</Button></div></details>
+            {previous && <p className="previous-performance">В прошлый раз: {previous.sets.map((set) => `${set.weight} × ${set.reps}`).join(' · ')}</p>}
+            <div className="sets-heading"><h3>Подходы</h3><span>Вес × повторы</span></div>
+            <ol className="sets-list">{(drafts[exercise.relationId] ?? []).map((set, index) => <li className={`training-set ${set.dirty ? 'training-set--draft' : ''}`} key={set.id}><span className="set-number">{index + 1}</span><label className="numeric-field"><span>Вес, кг</span><input inputMode="decimal" disabled={busy} aria-label={`${exercise.name}, подход ${index + 1}, вес`} value={set.weight} placeholder="0" onChange={(event) => editDraft(exercise.relationId, set.id, 'weight', event.target.value)} /></label><label className="numeric-field"><span>Повторы</span><input inputMode="numeric" disabled={busy} aria-label={`${exercise.name}, подход ${index + 1}, повторы`} value={set.reps} placeholder={String(previous?.sets[index]?.reps ?? '—')} onChange={(event) => editDraft(exercise.relationId, set.id, 'reps', event.target.value)} /></label><Button className={`set-check ${set.dirty ? '' : 'set-check--saved'}`} variant="quiet" disabled={busy || !set.dirty || !valid(set)} aria-label={set.dirty ? `Сохранить подход ${index + 1} — ${exercise.name}` : `Подход ${index + 1} сохранён на устройстве`} onClick={() => void saveRow(exercise.relationId, set)}>{set.dirty ? '○' : '✓'}</Button><Button className="delete-button" variant="quiet" disabled={busy} aria-label={`Удалить подход ${index + 1} — ${exercise.name}`} onClick={() => void deleteRow(exercise.relationId, set)}>×</Button></li>)}</ol>
+            <Button className="add-button" disabled={busy} onClick={() => addDraft(exercise.relationId, exercise.exerciseId)}>＋ Добавить подход</Button>
+          </section>
+        })}
+        <Button className="add-exercise-button" variant="quiet" disabled={busy} onClick={() => { setPicker(true); window.scrollTo({ top: 0 }) }}>＋ Добавить упражнение</Button>
+        {removed && <div className="undo-panel" role="status">Подход удалён<Button variant="quiet" disabled={busy} onClick={() => void (async () => { const { relationId, draft } = removed; if (await apply({ kind: 'saveSet', operationId: uuid(), id: uuid(), relationId, weight: draft.weight, reps: draft.reps, position: draft.position })) setRemoved(null) })()}>Отменить</Button></div>}
+        {unsaved && <p className="draft-hint">Заполните вес и повторы, затем нажмите ○. Черновики сохраняются на этом устройстве и не считаются выполненными подходами.</p>}
+        <Button className="finish-button" disabled={busy || savedCount === 0 || unsaved} onClick={() => void (async () => { if (await apply({ kind: 'finishWorkout', operationId: uuid() }, false)) changeTab('history') })()}>Завершить тренировку</Button>
+        <details className="workout-options"><summary>Дата и управление тренировкой</summary><label htmlFor="workout-date">Дата тренировки</label><input id="workout-date" className="search-input" type="date" value={localDay(view.startedAt ?? new Date())} max={localDay(new Date())} disabled={busy} onChange={(event) => { if (event.target.value) void apply({ kind: 'changeDate', operationId: uuid(), startedAt: new Date(`${event.target.value}T00:00:00`).toISOString() }) }} /><Button className="danger-text" variant="quiet" disabled={busy} onClick={() => { if (window.confirm('Удалить текущую тренировку и все её подходы? Это действие нельзя отменить.')) void apply({ kind: 'discardWorkout', operationId: uuid() }, false) }}>Удалить тренировку</Button></details>
       </>}
-      {!authenticated && <section className="backup-panel" aria-label="Резервная копия"><h2>Локальная копия</h2><div className="backup-actions"><Button variant="quiet" onClick={() => void exportData()}>Экспорт JSON</Button><Button variant="quiet" onClick={() => fileRef.current?.click()}>Импорт JSON</Button></div><input ref={fileRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Выбрать файл JSON для импорта" onChange={(event) => void importData(event.target.files?.[0])} /></section>}
+      {!authenticated && <section className="backup-panel"><h2>Локальная копия</h2><div className="backup-actions"><Button variant="quiet" onClick={() => void exportDev()}>Экспорт JSON</Button><Button variant="quiet" onClick={() => fileRef.current?.click()}>Импорт JSON</Button></div><input ref={fileRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Выбрать файл JSON для импорта" onChange={(event) => void importDev(event.target.files?.[0])} /></section>}
     </>}
-  </main><BottomNav tab={tab} onChange={setTab} /></>
+  </main><BottomNav tab={tab} onChange={changeTab} /></>
 }
-
 function BottomNav({ tab, onChange }: { tab: Tab; onChange: (tab: Tab) => void }) {
   const items: { id: Tab; label: string }[] = [{ id: 'workout', label: 'Тренировка' }, { id: 'history', label: 'История' }, { id: 'exercises', label: 'Упражнения' }, { id: 'progress', label: 'Прогресс' }]
   return <nav className="bottom-nav" aria-label="Разделы приложения">{items.map((item) => <button key={item.id} type="button" aria-current={tab === item.id ? 'page' : undefined} onClick={() => onChange(item.id)}><TabIcon tab={item.id} /><small>{item.label}</small></button>)}</nav>
