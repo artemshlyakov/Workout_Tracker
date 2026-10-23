@@ -92,4 +92,21 @@ describe('local workout repository', () => {
     expect((await repository.load()).sets[0]).toEqual(set)
     expect((await db.exerciseSets.get(set.id))?.deletedAt).toBeNull()
   })
+
+  it('loads and edits the live workout when an older workout is tombstoned', async () => {
+    await repository.load()
+    const old = (await db.workouts.toArray())[0]
+    const relation = (await db.workoutExercises.toArray())[0]
+    const liveId = id()
+    const liveRelationId = id()
+    await db.workouts.put({ ...old, deletedAt: new Date().toISOString() })
+    await db.workouts.add({ ...old, id: liveId, title: 'Новая тренировка', createdAt: new Date(Date.now() + 1000).toISOString(), deletedAt: null })
+    await db.workoutExercises.add({ ...relation, id: liveRelationId, workoutId: liveId })
+    expect(await repository.load()).toEqual({ title: 'Новая тренировка', sets: [] })
+    await repository.apply({ kind: 'rename', operationId: id(), title: 'Обновлённая тренировка' })
+    await repository.apply({ kind: 'saveSet', operationId: id(), id: id(), position: 0, weight: '70', reps: '8' })
+    expect((await db.workouts.get(liveId))?.title).toBe('Обновлённая тренировка')
+    expect((await db.workouts.get(old.id))?.title).toBe(old.title)
+    expect((await db.exerciseSets.where('workoutExerciseId').equals(liveRelationId).count())).toBe(1)
+  })
 })

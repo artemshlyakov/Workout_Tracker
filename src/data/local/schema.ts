@@ -5,8 +5,8 @@ export const BACKUP_VERSION = 1
 
 export interface Workspace {
   id: string
-  mode: 'dev_test'
-  ownerUserId: null
+  mode: 'dev_test' | 'authenticated'
+  ownerUserId: string | null
   createdAt: string
   lastActiveAt: string
 }
@@ -14,8 +14,8 @@ export interface Workspace {
 interface RecordMeta {
   id: string
   workspaceId: string
-  ownerUserId: null
-  serverRevision: null
+  ownerUserId: string | null
+  serverRevision: number | null
   localRevision: number
   createdAt: string
   updatedAt: string
@@ -44,22 +44,22 @@ export interface OutboxOperation {
   sequence?: number
   operationId: string
   workspaceId: string
-  ownerUserId: null
+  ownerUserId: string | null
   entityType: 'workout' | 'exercise' | 'workoutExercise' | 'exerciseSet'
   entityId: string
   action: 'upsert' | 'delete'
   snapshot: WorkoutRecord | ExerciseRecord | WorkoutExerciseRecord | ExerciseSetRecord
-  baseServerRevision: null
-  status: 'pending'
+  baseServerRevision: number | null
+  status: 'pending' | 'conflict'
   attempts: number
-  lastError: null
+  lastError: string | null
   createdAt: string
 }
 export interface SyncState {
   workspaceId: string
-  ownerUserId: null
-  cursor: null
-  lastAckAt: null
+  ownerUserId: string | null
+  cursor: string | null
+  lastAckAt: string | null
 }
 
 export interface DevBackup {
