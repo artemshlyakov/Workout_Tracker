@@ -1,251 +1,141 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { parseReps, parseWeight, removeSet, updateSet, type SetField, type WorkoutSet } from '../domain/workout'
-import { undoDeletedSet } from '../domain/undo'
+import { parseReps, parseWeight } from '../domain/workout'
 import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView } from '../data/ports/WorkoutRepository'
-import { LocalSaveStatus } from '../features/workout/LocalSaveStatus'
-import { ExerciseCard } from '../features/workout/ExerciseCard'
 import { Button } from '../shared/Button'
 import { ExercisesScreen, HistoryScreen, ProgressScreen } from '../features/journal/JournalScreens'
 
 type Tab = 'workout' | 'history' | 'exercises' | 'progress'
-
+type Draft = { id: string; weight: string; reps: string; position: number; saved: boolean; dirty: boolean }
 interface Props { repository: WorkoutRepository; authenticated?: boolean; onLocalWrite?: () => void; onDraftStateChange?: (unsaved: boolean) => void }
+const uuid = () => crypto.randomUUID()
+const message = (cause: unknown) => cause instanceof Error ? cause.message : 'неизвестная ошибка'
+const valid = (set: Draft) => { const weight = parseWeight(set.weight), reps = parseReps(set.reps); return weight !== null && weight <= 2000 && reps !== null && reps >= 1 && reps <= 1000 }
+const fromView = (view: WorkoutView): Record<string, Draft[]> => Object.fromEntries(view.exercises.map((exercise) => [exercise.relationId, exercise.sets.map((set) => ({ ...set, saved: true, dirty: false }))]))
 
 export function App({ repository, authenticated = false, onLocalWrite, onDraftStateChange }: Props) {
-  const [sets, setSets] = useState<WorkoutSet[]>([])
+  const [view, setView] = useState<WorkoutView | null>(null)
+  const [drafts, setDrafts] = useState<Record<string, Draft[]>>({})
   const [title, setTitle] = useState('')
-  const [exerciseName, setExerciseName] = useState('Жим штанги лёжа')
-  const [hasActive, setHasActive] = useState(true)
+  const [newTitle, setNewTitle] = useState('')
+  const [exerciseName, setExerciseName] = useState('')
+  const [picker, setPicker] = useState(false)
   const [tab, setTab] = useState<Tab>('workout')
   const [journal, setJournal] = useState<JournalView | null>(null)
-  const [journalError, setJournalError] = useState<string | null>(null)
-  const [journalRetry, setJournalRetry] = useState(0)
-  const [actionBusy, setActionBusy] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [pending, setPending] = useState(0)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [newestId, setNewestId] = useState<string | null>(null)
-  const [removed, setRemoved] = useState<{ set: WorkoutSet; index: number } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [removed, setRemoved] = useState<{ relationId: string; draft: Draft } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const commands = useRef<WorkoutCommand[]>([])
-  const draining = useRef<Promise<void> | null>(null)
-  const blocked = useRef(false)
-  const positions = useRef(new Map<string, number>())
-  const nextPosition = useRef(0)
   const date = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }).format(new Date())
 
-  const showView = useCallback((view: WorkoutView) => {
-    positions.current.clear()
-    nextPosition.current = 0
-    setHasActive(view.active !== false)
-    setTitle(view.title)
-    setExerciseName(view.exerciseName ?? 'Жим штанги лёжа')
-    setSets(view.sets.map(({ id, weight, reps, position }) => {
-      positions.current.set(id, position)
-      nextPosition.current = Math.max(nextPosition.current, position + 1)
-      return { id, weight, reps }
-    }))
-  }, [])
-
-  useEffect(() => {
-    let active = true
-    repository.load().then((view) => {
-      if (!active) return
-      showView(view)
-      setLoading(false)
-    }).catch((cause: unknown) => {
-      if (active) { setLoadError(message(cause)); setLoading(false) }
-    })
-    return () => { active = false }
-  }, [repository, showView])
-
-  useEffect(() => {
-    if (tab === 'workout') return
-    let active = true
-    repository.listJournal().then((view) => { if (active) { setJournal(view); setJournalError(null) } })
-      .catch((cause: unknown) => { if (active) setJournalError(message(cause)) })
-    return () => { active = false }
-  }, [repository, tab, journalRetry])
-
-  function drain() {
-    if (draining.current || blocked.current) return
-    draining.current = (async () => {
-      while (commands.current.length > 0) {
-        try {
-          await repository.apply(commands.current[0])
-          commands.current.shift()
-          setPending(commands.current.length)
-          onLocalWrite?.()
-        } catch (cause) {
-          blocked.current = true
-          setError(message(cause))
-          break
-        }
+  const refresh = useCallback(async (preserveDrafts = false) => {
+    const next = await repository.load()
+    if (!preserveDrafts) setRemoved(null)
+    setView(next)
+    setTitle((current) => preserveDrafts && current.trim() ? current : next.title)
+    setDrafts((current) => {
+      const loaded = fromView(next)
+      if (preserveDrafts) for (const relationId of Object.keys(loaded)) {
+        const pending = (current[relationId] ?? []).filter((draft) => draft.dirty)
+        loaded[relationId] = loaded[relationId].map((item) => pending.find((draft) => draft.id === item.id) ?? item)
+          .concat(pending.filter((draft) => !draft.saved && !loaded[relationId].some((item) => item.id === draft.id)))
       }
-    })().finally(() => { draining.current = null })
-  }
-
-  function enqueue(command: WorkoutCommand) {
-    commands.current.push(command)
-    setPending(commands.current.length)
-    drain()
-  }
-
-  function retry() {
-    blocked.current = false
-    setError(null)
-    drain()
-  }
-
-  async function waitForWrites() {
-    await draining.current
-    if (commands.current.length > 0 || invalid) throw new Error('Есть несохранённые изменения. Исправьте ввод или повторите сохранение')
-  }
-
-  async function changeWorkout(command: WorkoutCommand) {
-    setActionBusy(true)
-    try {
-      if (command.kind !== 'startWorkout') await waitForWrites()
-      await repository.apply(command)
-      onLocalWrite?.()
-      showView(await repository.load())
-      setJournal(await repository.listJournal())
-      setError(null)
-      setNotice(command.kind === 'finishWorkout' ? 'Тренировка завершена и сохранена на устройстве' : 'Новая тренировка создана на устройстве')
-    } catch (cause) { setError(message(cause)) }
-    finally { setActionBusy(false) }
-  }
-
-  function handleChange(id: string, field: SetField, value: string) {
-    const updated = updateSet(sets, id, field, value)
-    setSets(updated)
-    const changed = updated.find((set) => set.id === id)!
-    if (validSet(changed)) enqueue({ kind: 'saveSet', operationId: crypto.randomUUID(), ...changed, position: positions.current.get(id) ?? 0 })
-  }
-
-  function handleAdd() {
-    const previous = [...sets].reverse().find((set) => parseWeight(set.weight) !== null)
-    const set = { id: crypto.randomUUID(), weight: previous?.weight ?? '0', reps: '1' }
-    const position = nextPosition.current++
-    positions.current.set(set.id, position)
-    setSets((current) => [...current, set])
-    setNewestId(set.id)
-    setRemoved(null)
-    enqueue({ kind: 'saveSet', operationId: crypto.randomUUID(), ...set, position })
-  }
-
-  function handleDelete(id: string) {
-    const index = sets.findIndex((set) => set.id === id)
-    if (index < 0) return
-    setRemoved({ set: sets[index], index })
-    setSets((current) => removeSet(current, id))
-    if (newestId === id) setNewestId(null)
-    enqueue({ kind: 'deleteSet', operationId: crypto.randomUUID(), id })
-  }
-
-  function handleUndo() {
-    if (!removed || !validSet(removed.set)) return
-    const { set, index } = removed
-    const restored = undoDeletedSet(set, positions.current.get(set.id) ?? index)
-    positions.current.set(restored.set.id, restored.command.position)
-    setSets((current) => {
-      const next = [...current]
-      next.splice(Math.min(index, next.length), 0, restored.set)
-      return next
+      return loaded
     })
-    setRemoved(null)
-    enqueue(restored.command)
-  }
+    setJournal(await repository.listJournal())
+  }, [repository])
 
-  async function handleExport() {
+  useEffect(() => { let active = true; refresh().catch((cause: unknown) => { if (active) setError(message(cause)) }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [refresh])
+  const unsaved = Boolean(view?.active && (title.trim() !== view.title || Object.values(drafts).some((sets) => sets.some((set) => set.dirty))))
+  useEffect(() => { onDraftStateChange?.(unsaved || busy) }, [unsaved, busy, onDraftStateChange])
+
+  async function apply(command: WorkoutCommand, preserveDrafts = false) {
+    setBusy(true); setError(null); setNotice(null)
+    try { await repository.apply(command); onLocalWrite?.(); await refresh(preserveDrafts); return true }
+    catch (cause) { setError(message(cause)); return false }
+    finally { setBusy(false) }
+  }
+  function addDraft(relationId: string) {
+    setDrafts((current) => {
+      const list = current[relationId] ?? []
+      const previous = [...list].reverse().find((set) => parseWeight(set.weight) !== null)
+      return { ...current, [relationId]: [...list, { id: uuid(), weight: previous?.weight ?? '', reps: '', position: Math.max(-1, ...list.map((set) => set.position)) + 1, saved: false, dirty: true }] }
+    })
+  }
+  function editDraft(relationId: string, id: string, field: 'weight' | 'reps', value: string) {
+    setDrafts((current) => ({ ...current, [relationId]: current[relationId].map((set) => set.id === id ? { ...set, [field]: value, dirty: true } : set) }))
+  }
+  async function saveDraft(relationId: string, draft: Draft) {
+    if (!valid(draft)) { setError('Укажите вес от 0 до 2000 кг и повторы от 1 до 1000'); return }
+    const ok = await apply({ kind: 'saveSet', operationId: uuid(), id: draft.id, relationId, weight: draft.weight, reps: draft.reps, position: draft.position }, true)
+    if (ok) setDrafts((current) => ({ ...current, [relationId]: current[relationId].map((set) => set.id === draft.id ? { ...set, saved: true, dirty: false } : set) }))
+  }
+  async function deleteDraft(relationId: string, draft: Draft) {
+    if (!draft.saved) { setDrafts((current) => ({ ...current, [relationId]: current[relationId].filter((set) => set.id !== draft.id) })); return }
+    if (await apply({ kind: 'deleteSet', operationId: uuid(), id: draft.id, relationId }, true)) setRemoved({ relationId, draft })
+  }
+  async function addExercise(exerciseId: string) {
+    if (await apply({ kind: 'addExercise', operationId: uuid(), relationId: uuid(), exerciseId }, true)) setPicker(false)
+  }
+  async function createExercise() {
+    const name = exerciseName.trim()
+    if (!name) { setError('Введите название упражнения'); return }
+    const exerciseId = uuid()
+    if (await apply({ kind: 'createExercise', operationId: uuid(), exerciseId, name }, true)) {
+      setExerciseName('')
+      if (view?.active) await addExercise(exerciseId)
+    }
+  }
+  async function exportData() {
     try {
-      await waitForWrites()
       const json = await repository.exportData()
       const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = 'workout-tracker-dev-backup.json'
-      link.click()
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-      setNotice('Резервная копия скачана')
-    } catch (cause) { setNotice(`Не удалось экспортировать: ${message(cause)}`) }
+      const link = document.createElement('a'); link.href = url; link.download = 'workout-tracker-dev-backup.json'; link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice('Копия скачана')
+    } catch (cause) { setError(message(cause)) }
   }
-
-  async function handleImport(file: File | undefined) {
-    if (!file) return
-    if (!window.confirm('Импорт заменит все локальные тестовые данные на данные из файла. Продолжить?')) return
-    try {
-      await waitForWrites()
-      const view = await repository.importData(await file.text())
-      positions.current.clear()
-      nextPosition.current = 0
-      setSets(view.sets.map(({ id, weight, reps, position }) => {
-        positions.current.set(id, position)
-        nextPosition.current = Math.max(nextPosition.current, position + 1)
-        return { id, weight, reps }
-      }))
-      setTitle(view.title)
-      setError(null)
-      commands.current = []
-      blocked.current = false
-      setRemoved(null)
-      setNotice('Локальные тестовые данные восстановлены')
-    } catch (cause) { setNotice(`Не удалось импортировать: ${message(cause)}`) }
+  async function importData(file?: File) {
+    if (!file || !window.confirm('Импорт заменит все локальные тестовые данные. Продолжить?')) return
+    try { await repository.importData(await file.text()); await refresh(); setNotice('Данные восстановлены') }
+    catch (cause) { setError(message(cause)) }
     finally { if (fileRef.current) fileRef.current.value = '' }
   }
 
-  const invalid = hasActive && (title.trim().length === 0 || sets.some((set) => !validSet(set)))
-
-  useEffect(() => { onDraftStateChange?.(pending > 0 || invalid) }, [pending, invalid, onDraftStateChange])
-
   if (tab !== 'workout') return <><main className="app-shell app-shell--with-nav">
-    {journalError ? <div role="alert" className="load-error">Не удалось открыть журнал: {journalError} <Button onClick={() => { setJournalError(null); setJournalRetry((value) => value + 1) }}>Повторить</Button></div> : !journal ? <p role="status">Загружаем журнал…</p> : tab === 'history' ? <HistoryScreen journal={journal} /> : tab === 'exercises' ? <ExercisesScreen journal={journal} /> : <ProgressScreen journal={journal} />}
+    {!journal ? <p role="status">Загружаем журнал…</p> : tab === 'history' ? <HistoryScreen journal={journal} /> : tab === 'exercises' ? <ExercisesScreen journal={journal} /> : <ProgressScreen journal={journal} />}
   </main><BottomNav tab={tab} onChange={setTab} /></>
 
+  const savedCount = view?.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0) ?? 0
+  const catalog = (journal?.exercises ?? []).filter((exercise) => !view?.exercises.some((item) => item.exerciseId === exercise.id))
   return <><main className="app-shell app-shell--with-nav">
-    <header className="page-header">
-      <div className="header-kicker"><span className="live-dot" aria-hidden="true" /> АКТИВНАЯ ТРЕНИРОВКА</div>
-      <h1>Тренировка</h1><p className="date-line">{date}</p>
-    </header>
-    {!authenticated && <div className="dev-banner" role="note">Режим разработки — нет аккаунта и облачной копии</div>}
-    {loading ? <p role="status">Загружаем локальную тренировку…</p> : loadError ? <div role="alert" className="load-error"><p>Не удалось открыть локальные данные: {loadError}</p><Button onClick={() => window.location.reload()}>Повторить загрузку</Button></div> : <>
-      {authenticated ? error ? <div role="alert" className="load-error">Локальная запись не удалась: {error} <Button onClick={retry}>Повторить</Button></div> : invalid ? <div role="alert" className="local-status local-status--error">Исправьте пустые или некорректные значения: они ещё не сохранены.</div> : pending > 0 ? <div role="status" className="local-status">Сохраняем на устройстве…</div> : null : <LocalSaveStatus pending={pending} error={error} invalid={invalid} onRetry={retry} />}
-      {!hasActive ? <section className="empty-panel"><strong>Тренировка завершена</strong><p>Ваши результаты сохранены в истории. Начните следующую тренировку, когда будете готовы.</p><Button disabled={actionBusy} onClick={() => void changeWorkout({ kind: 'startWorkout', operationId: crypto.randomUUID(), relationOperationId: crypto.randomUUID(), workoutId: crypto.randomUUID(), relationId: crypto.randomUUID() })}>Начать тренировку</Button></section> : <><section className="workout-title-card" aria-label="Название тренировки">
-        <label htmlFor="workout-title">НАЗВАНИЕ ТРЕНИРОВКИ</label>
-        <input id="workout-title" value={title} onChange={(event) => {
-          const value = event.target.value
-          setTitle(value)
-          if (value.trim()) enqueue({ kind: 'rename', operationId: crypto.randomUUID(), title: value })
-        }} maxLength={60} aria-label="Название тренировки" />
-      </section>
-      <ExerciseCard name={exerciseName} sets={sets} newestId={newestId} onChange={handleChange} onAdd={handleAdd} onDelete={handleDelete} />
-      {removed && <div className="undo-panel" role="status"><span>Подход удалён</span><Button variant="quiet" onClick={handleUndo}>Отменить</Button></div>}
-      <Button className="finish-button" variant="quiet" disabled={actionBusy || pending > 0 || invalid || sets.length === 0} onClick={() => void changeWorkout({ kind: 'finishWorkout', operationId: crypto.randomUUID() })}>Завершить тренировку</Button></>}
-      {authenticated && notice && <p role="status" className="backup-notice">{notice}</p>}
-      {!authenticated && <section className="backup-panel" aria-label="Резервная копия">
-        <h2>Локальная копия</h2><p>Экспортируйте тестовые данные в JSON. Импорт полностью заменит текущую локальную тренировку.</p>
-        <div className="backup-actions">
-          <Button variant="quiet" onClick={handleExport}>Экспорт JSON</Button>
-          <Button variant="quiet" onClick={() => fileRef.current?.click()}>Импорт JSON</Button>
-        </div>
-        <input ref={fileRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Выбрать файл JSON для импорта" onChange={(event) => void handleImport(event.target.files?.[0])} />
-        {notice && <p role="status" className="backup-notice">{notice}</p>}
-      </section>}
-      <p className="footer-note">{authenticated ? 'Локальные данные этого аккаунта хранятся на устройстве. Состояние облака показано выше.' : 'Данные хранятся только в этом браузере. Очистка хранилища удалит их.'}</p>
+    <header className="page-header"><div className="header-kicker"><span className="live-dot" aria-hidden="true" /> ЖУРНАЛ ТРЕНИРОВОК</div><h1>Тренировка</h1><p className="date-line">{date}</p></header>
+    {loading ? <p role="status">Загружаем тренировку…</p> : <>
+      {error && <div role="alert" className="load-error">{error}</div>}
+      {notice && <p role="status" className="backup-notice">{notice}</p>}
+      {!view?.active ? <section className="empty-panel start-panel"><p className="eyebrow">НОВАЯ ТРЕНИРОВКА</p><h2>Начнём с названия</h2><p>Упражнения и подходы добавите после начала.</p><label htmlFor="new-workout-title">Название тренировки</label><input id="new-workout-title" className="search-input" maxLength={60} placeholder="Например, Спина и бицепс" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} /><Button disabled={busy || !newTitle.trim()} onClick={() => void (async () => { if (await apply({ kind: 'startWorkout', operationId: uuid(), workoutId: uuid(), title: newTitle })) setNewTitle('') })()}>Начать тренировку</Button></section> : <>
+        <section className="workout-title-card" aria-label="Название тренировки"><label htmlFor="workout-title">НАЗВАНИЕ ТРЕНИРОВКИ</label><div className="title-edit"><input id="workout-title" maxLength={60} value={title} onChange={(event) => setTitle(event.target.value)} /><Button variant="quiet" disabled={busy || !title.trim() || title === view.title} onClick={() => void apply({ kind: 'rename', operationId: uuid(), title }, true)}>Сохранить</Button></div></section>
+        <div className="workout-summary"><span>{view.exercises.length} упр.</span><span>{savedCount} сохранённых подходов</span></div>
+        {view.exercises.map((exercise, exerciseIndex) => <section key={exercise.relationId} className="exercise-card multi-exercise-card" aria-labelledby={`exercise-${exercise.relationId}`}>
+          <div className="exercise-card__heading"><div className="exercise-icon" aria-hidden="true">✦</div><div><p className="eyebrow">УПРАЖНЕНИЕ {String(exerciseIndex + 1).padStart(2, '0')}</p><h2 id={`exercise-${exercise.relationId}`}>{exercise.name}</h2></div></div>
+          <div className="sets-heading"><h3>Подходы</h3><span>Вес × повторы</span></div>
+          {(drafts[exercise.relationId] ?? []).length === 0 ? <p className="empty-note">Добавьте первый подход.</p> : <ol className="sets-list">{drafts[exercise.relationId].map((set, index) => <li key={set.id} className="set-row set-row--editable"><span className="set-number">{String(index + 1).padStart(2, '0')}</span><label className="numeric-field"><span>Вес, кг</span><input inputMode="decimal" aria-label={`${exercise.name}, подход ${index + 1}, вес`} value={set.weight} onChange={(event) => editDraft(exercise.relationId, set.id, 'weight', event.target.value)} /></label><label className="numeric-field"><span>Повторы</span><input inputMode="numeric" aria-label={`${exercise.name}, подход ${index + 1}, повторы`} value={set.reps} onChange={(event) => editDraft(exercise.relationId, set.id, 'reps', event.target.value)} /></label><Button variant="quiet" className="delete-button" disabled={busy} aria-label={`Удалить подход ${index + 1} — ${exercise.name}`} onClick={() => void deleteDraft(exercise.relationId, set)}>×</Button>{set.dirty && <Button className="set-save" disabled={busy || !valid(set)} onClick={() => void saveDraft(exercise.relationId, set)}>Сохранить подход</Button>}</li>)}</ol>}
+          <Button className="add-button" disabled={busy} onClick={() => addDraft(exercise.relationId)}><span aria-hidden="true">＋</span> Добавить подход</Button>
+        </section>)}
+        <Button className="add-exercise-button" variant="quiet" onClick={() => setPicker((current) => !current)}>＋ Добавить упражнение</Button>
+        {picker && <section className="exercise-picker" aria-label="Выбрать упражнение"><h2>Каталог упражнений</h2>{catalog.length ? <div className="picker-list">{catalog.map((exercise) => <Button key={exercise.id} variant="quiet" disabled={busy} onClick={() => void addExercise(exercise.id)}>{exercise.name} <span aria-hidden="true">＋</span></Button>)}</div> : <p className="empty-note">Свободных упражнений пока нет.</p>}<label htmlFor="custom-exercise">Своё упражнение</label><div className="picker-create"><input id="custom-exercise" className="search-input" maxLength={120} placeholder="Название упражнения" value={exerciseName} onChange={(event) => setExerciseName(event.target.value)} /><Button disabled={busy || !exerciseName.trim()} onClick={() => void createExercise()}>Создать</Button></div></section>}
+        {removed && <div className="undo-panel" role="status">Подход удалён <Button variant="quiet" disabled={busy} onClick={() => void (async () => { const { relationId, draft } = removed; if (await apply({ kind: 'saveSet', operationId: uuid(), id: uuid(), relationId, weight: draft.weight, reps: draft.reps, position: draft.position }, true)) setRemoved(null) })()}>Отменить</Button></div>}
+        <Button className="finish-button" variant="quiet" disabled={busy || savedCount === 0 || unsaved} onClick={() => void (async () => { if (await apply({ kind: 'finishWorkout', operationId: uuid() })) { setPicker(false); setTab('history') } })()}>Завершить тренировку</Button>
+      </>}
+      {!authenticated && <section className="backup-panel" aria-label="Резервная копия"><h2>Локальная копия</h2><div className="backup-actions"><Button variant="quiet" onClick={() => void exportData()}>Экспорт JSON</Button><Button variant="quiet" onClick={() => fileRef.current?.click()}>Импорт JSON</Button></div><input ref={fileRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Выбрать файл JSON для импорта" onChange={(event) => void importData(event.target.files?.[0])} /></section>}
     </>}
   </main><BottomNav tab={tab} onChange={setTab} /></>
 }
 
 function BottomNav({ tab, onChange }: { tab: Tab; onChange: (tab: Tab) => void }) {
-  const items: { id: Tab; label: string }[] = [
-    { id: 'workout', label: 'Тренировка' }, { id: 'history', label: 'История' },
-    { id: 'exercises', label: 'Упражнения' }, { id: 'progress', label: 'Прогресс' },
-  ]
+  const items: { id: Tab; label: string }[] = [{ id: 'workout', label: 'Тренировка' }, { id: 'history', label: 'История' }, { id: 'exercises', label: 'Упражнения' }, { id: 'progress', label: 'Прогресс' }]
   return <nav className="bottom-nav" aria-label="Разделы приложения">{items.map((item) => <button key={item.id} type="button" aria-current={tab === item.id ? 'page' : undefined} onClick={() => onChange(item.id)}><TabIcon tab={item.id} /><small>{item.label}</small></button>)}</nav>
 }
-
 function TabIcon({ tab }: { tab: Tab }) {
   const paths: Record<Tab, ReactNode> = {
     workout: <><path d="M2 10v4m3-7v10m3-12v14m8-14v14m3-12v10m3-7v4M8 12h8" /></>,
@@ -255,10 +145,3 @@ function TabIcon({ tab }: { tab: Tab }) {
   }
   return <svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{paths[tab]}</svg>
 }
-
-function validSet(set: WorkoutSet): boolean {
-  const weight = parseWeight(set.weight)
-  const reps = parseReps(set.reps)
-  return weight !== null && weight <= 2000 && reps !== null && reps >= 1 && reps <= 1000
-}
-function message(cause: unknown): string { return cause instanceof Error ? cause.message : 'неизвестная ошибка' }

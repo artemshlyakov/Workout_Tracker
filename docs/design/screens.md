@@ -49,3 +49,7 @@ Loading, empty, signed out, offline with cached prior identity, first-login offl
 - Keep last values visible without leaving active workout where possible.
 - Test on actual phone with keyboard open and at 200% font-size where practical.
 - Do not require network after PWA installation if offline phase is accepted and completed.
+
+## Implemented multi-exercise entry
+
+Start with a required user-provided workout name; no catalog exercise is inserted for a new account. The active screen can attach several existing catalog entries or create and attach a new one. Each exercise card owns independent ordered sets. Adding a row copies the previous weight only as a draft, leaves repetitions empty, and writes nothing until the user explicitly saves valid weight and repetitions. Editing a saved row also requires explicit save. Finish is enabled only when a saved set exists and no unsaved drafts or title edit remain; it opens the existing history, which retains every exercise and set after reload. Local visual checks at 360 and 390 px: `../screenshots/workout-multi-360.png`, `../screenshots/workout-multi-390.png`. The screenshots use a temporary local account and do not establish cloud browser coverage.

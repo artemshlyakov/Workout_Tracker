@@ -1,8 +1,8 @@
 export interface WorkoutView {
   title: string
-  exerciseName?: string
-  sets: { id: string; weight: string; reps: string; position: number }[]
-  active?: boolean
+  workoutId?: string
+  exercises: { relationId: string; exerciseId: string; name: string; sets: { id: string; weight: string; reps: string; position: number }[] }[]
+  active: boolean
 }
 
 export interface JournalEntry {
@@ -21,10 +21,12 @@ export interface JournalView {
 export type WorkoutCommand =
   | { kind: 'rename'; operationId: string; title: string }
   | { kind: 'finishWorkout'; operationId: string }
-  | { kind: 'startWorkout'; operationId: string; relationOperationId: string; workoutId: string; relationId: string }
-  | { kind: 'saveSet'; operationId: string; id: string; weight: string; reps: string; position: number }
-  | { kind: 'deleteSet'; operationId: string; id: string }
-  | { kind: 'restoreSet'; operationId: string; id: string; weight: string; reps: string; position: number }
+  | { kind: 'startWorkout'; operationId: string; workoutId: string; title: string }
+  | { kind: 'createExercise'; operationId: string; exerciseId: string; name: string }
+  | { kind: 'addExercise'; operationId: string; relationId: string; exerciseId: string }
+  | { kind: 'saveSet'; operationId: string; id: string; relationId: string; weight: string; reps: string; position: number }
+  | { kind: 'deleteSet'; operationId: string; id: string; relationId: string }
+  | { kind: 'restoreSet'; operationId: string; id: string; relationId: string; weight: string; reps: string; position: number }
 
 export interface WorkoutRepository {
   load(): Promise<WorkoutView>

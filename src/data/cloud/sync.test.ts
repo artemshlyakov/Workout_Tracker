@@ -48,11 +48,21 @@ beforeEach(() => {
 })
 afterEach(async () => { db.close(); await db.delete() })
 
+async function seedAccount(): Promise<string> {
+  await repository.load()
+  const exerciseId = crypto.randomUUID(), relationId = crypto.randomUUID()
+  await repository.apply({ kind: 'startWorkout', operationId: crypto.randomUUID(), workoutId: crypto.randomUUID(), title: 'Силовая тренировка' })
+  await repository.apply({ kind: 'createExercise', operationId: crypto.randomUUID(), exerciseId, name: 'Жим штанги лёжа' })
+  await repository.apply({ kind: 'addExercise', operationId: crypto.randomUUID(), relationId, exerciseId })
+  return relationId
+}
+
+
 describe('initial account sync', () => {
   it('does not promote the Plan 002 sample sets into a new account', async () => {
     expect(await new CloudSync(repository, client).prepare()).toEqual({ cloudChecked: true })
     const view = await repository.load()
-    expect(view.sets).toEqual([])
+    expect(view.exercises).toEqual([])
     expect((await db.workspaces.get(owner))?.ownerUserId).toBe(owner)
     expect((await db.outbox.toArray()).every((op) => op.ownerUserId === owner)).toBe(true)
   })
@@ -70,13 +80,13 @@ describe('initial account sync', () => {
     }
     client = { ...client, from: vi.fn((name: string) => ({ select: () => ({ eq: () => request({ data: rows[name], error: null }) }) })) } as unknown as SupabaseClient
     await new CloudSync(repository, client).prepare()
-    expect((await repository.load()).sets).toEqual([{ id: setId, weight: '82,5', reps: '8', position: 0 }])
+    expect((await repository.load()).exercises[0]?.sets).toEqual([{ id: setId, weight: '82,5', reps: '8', position: 0 }])
     expect((await db.exerciseSets.get(setId))?.serverRevision).toBe(4)
     expect(await db.outbox.count()).toBe(0)
   })
 
   it('uploads parents in order and clears only confirmed operations', async () => {
-    await repository.load()
+    await seedAccount()
     const sync = new CloudSync(repository, client)
     expect(await sync.push()).toEqual({ acknowledged: 3, pending: 0 })
     expect(rpc.mock.calls.map(([, args]) => args.p_entity_type)).toEqual(['workout', 'exercise', 'workout_exercise'])
@@ -85,7 +95,7 @@ describe('initial account sync', () => {
   })
 
   it('retries an unknown acknowledgment with the same operation UUID and CAS revision', async () => {
-    await repository.load()
+    await seedAccount()
     const sync = new CloudSync(repository, client)
     rpc.mockImplementationOnce(() => request({ data: null, error: new Error('connection lost') }))
     await expect(sync.push()).rejects.toThrow('connection lost')
@@ -95,7 +105,7 @@ describe('initial account sync', () => {
   })
 
   it('blocks an operation assigned to another account before calling RPC', async () => {
-    await repository.load()
+    await seedAccount()
     const operation = (await db.outbox.toArray())[0]
     await db.outbox.update(operation.sequence!, { ownerUserId: other })
     await expect(new CloudSync(repository, client).push()).rejects.toThrow('другому аккаунту')
@@ -103,17 +113,17 @@ describe('initial account sync', () => {
   })
 
   it('does not expose A records or A outbox in B local workspace', async () => {
-    await repository.load()
+    await seedAccount()
     const b = new DexieWorkoutRepository(db, { ownerUserId: other })
     await b.load()
-    await repository.apply({ kind: 'saveSet', operationId: crypto.randomUUID(), id: crypto.randomUUID(), weight: '80', reps: '10', position: 0 })
-    expect((await repository.load()).sets).toHaveLength(1)
-    expect((await b.load()).sets).toHaveLength(0)
+    await repository.apply({ kind: 'saveSet', operationId: crypto.randomUUID(), relationId: (await repository.load()).exercises[0].relationId, id: crypto.randomUUID(), weight: '80', reps: '10', position: 0 })
+    expect((await repository.load()).exercises[0]?.sets).toHaveLength(1)
+    expect((await b.load()).exercises).toHaveLength(0)
     expect((await db.outbox.where('workspaceId').equals(other).toArray()).every((op) => op.ownerUserId === other)).toBe(true)
   })
 
   it('keeps a CAS conflict in the outbox', async () => {
-    await repository.load()
+    await seedAccount()
     rpc.mockImplementationOnce((_name: string, args: Record<string, unknown>) => request({ data: {
       status: 'conflict', operation_id: args.p_operation_id, entity_id: args.p_entity_id, server_revision: 2,
     }, error: null }))
@@ -127,7 +137,7 @@ describe('initial account sync', () => {
     expect(await db.workspaces.get(owner)).toBeUndefined()
     expect(await db.outbox.count()).toBe(0)
     expect(await new CloudSync(repository, client).prepare()).toEqual({ cloudChecked: true })
-    expect((await repository.load()).sets).toEqual([])
+    expect((await repository.load()).exercises).toEqual([])
   })
 
   it('rejects foreign rows during initial pull', async () => {
@@ -137,7 +147,7 @@ describe('initial account sync', () => {
   })
 
   it('does not send A outbox when B owns the current session', async () => {
-    await repository.load()
+    await seedAccount()
     currentUser = other
     await expect(new CloudSync(repository, client).push()).rejects.toThrow('другого аккаунта')
     expect(rpc).not.toHaveBeenCalled()
@@ -145,7 +155,7 @@ describe('initial account sync', () => {
   })
 
   it('binds an in-flight A request to A token even after B signs in', async () => {
-    await repository.load()
+    await seedAccount()
     rpc.mockImplementationOnce((_name: string, args: Record<string, unknown>) => {
       currentUser = other
       return request({ data: { status: 'applied', operation_id: args.p_operation_id, entity_id: args.p_entity_id, revision: 1 }, error: null })
@@ -157,7 +167,7 @@ describe('initial account sync', () => {
   })
 
   it('aborts an in-flight request on logout and preserves pending work for retry', async () => {
-    await repository.load()
+    await seedAccount()
     rpc.mockImplementationOnce(() => request(new Promise(() => undefined)))
     const sync = new CloudSync(repository, client)
     const pending = sync.push()
@@ -169,7 +179,7 @@ describe('initial account sync', () => {
   })
 
   it('does not acknowledge an old response after logout even if transport ignores abort', async () => {
-    await repository.load()
+    await seedAccount()
     let answer!: (value: unknown) => void
     rpc.mockImplementationOnce(() => ({
       setHeader() { return this }, abortSignal() { return this },
@@ -185,35 +195,35 @@ describe('initial account sync', () => {
   })
 
   it('undoes a confirmed tombstone with a new UUID and retains the original delete', async () => {
-    await repository.load()
+    await seedAccount()
     const originalId = crypto.randomUUID()
-    await repository.apply({ kind: 'saveSet', operationId: crypto.randomUUID(), id: originalId, weight: '80', reps: '10', position: 0 })
+    await repository.apply({ kind: 'saveSet', operationId: crypto.randomUUID(), relationId: (await repository.load()).exercises[0].relationId, id: originalId, weight: '80', reps: '10', position: 0 })
     const sync = new CloudSync(repository, client)
     await sync.push()
-    await repository.apply({ kind: 'deleteSet', operationId: crypto.randomUUID(), id: originalId })
+    await repository.apply({ kind: 'deleteSet', operationId: crypto.randomUUID(), relationId: (await repository.load()).exercises[0].relationId, id: originalId })
     await sync.push()
     expect((await db.exerciseSets.get(originalId))?.deletedAt).not.toBeNull()
-    const undo = undoDeletedSet({ id: originalId, weight: '80', reps: '10' }, 0)
+    const undo = undoDeletedSet({ id: originalId, weight: '80', reps: '10' }, 0, (await repository.load()).exercises[0].relationId)
     expect(undo.set.id).not.toBe(originalId)
     await repository.apply(undo.command)
     await sync.push()
-    expect((await repository.load()).sets).toEqual([{ id: undo.set.id, weight: '80', reps: '10', position: 0 }])
+    expect((await repository.load()).exercises[0]?.sets).toEqual([{ id: undo.set.id, weight: '80', reps: '10', position: 0 }])
     expect((await db.exerciseSets.get(originalId))?.deletedAt).not.toBeNull()
     expect(await db.outbox.count()).toBe(0)
   })
 
   it('keeps quick delete and undo as distinct ordered operations', async () => {
-    await repository.load()
+    await seedAccount()
     const originalId = crypto.randomUUID()
-    await repository.apply({ kind: 'saveSet', operationId: crypto.randomUUID(), id: originalId, weight: '80', reps: '10', position: 0 })
+    await repository.apply({ kind: 'saveSet', operationId: crypto.randomUUID(), relationId: (await repository.load()).exercises[0].relationId, id: originalId, weight: '80', reps: '10', position: 0 })
     await new CloudSync(repository, client).push()
-    await repository.apply({ kind: 'deleteSet', operationId: crypto.randomUUID(), id: originalId })
-    const undo = undoDeletedSet({ id: originalId, weight: '80', reps: '10' }, 0)
+    await repository.apply({ kind: 'deleteSet', operationId: crypto.randomUUID(), relationId: (await repository.load()).exercises[0].relationId, id: originalId })
+    const undo = undoDeletedSet({ id: originalId, weight: '80', reps: '10' }, 0, (await repository.load()).exercises[0].relationId)
     await repository.apply(undo.command)
     await new CloudSync(repository, client).push()
     expect(rpc.mock.calls.slice(-2).map(([, args]) => [args.p_action, args.p_entity_id])).toEqual([
       ['delete', originalId], ['upsert', undo.set.id],
     ])
-    expect((await repository.load()).sets.map((set) => set.id)).toEqual([undo.set.id])
+    expect((await repository.load()).exercises[0]?.sets.map((set) => set.id)).toEqual([undo.set.id])
   })
 })

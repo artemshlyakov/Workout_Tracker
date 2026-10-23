@@ -1,6 +1,6 @@
 # Data model — local-first + Supabase v0.4
 
-**Status:** the Plan 003A migration in `supabase/migrations/20261020132939_private_workout_sync.sql` was applied to project `snnlibzckwpmbkersdnm` via Supabase MCP; the local version now matches cloud history (details: `supabase/migrations/README.md`). Auth and sync remain future work. The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
+**Status:** the Plan 003A migration in `supabase/migrations/20261020132939_private_workout_sync.sql` was applied to project `snnlibzckwpmbkersdnm` via Supabase MCP; the local version now matches cloud history (details: `supabase/migrations/README.md`). Auth and initial sync are implemented and merged; the full browser offline/online gate remains open. The legacy v0.2 SQL in `supabase/drafts/` remains unapproved and must never be executed.
 
 ## Logical graph
 ```mermaid
@@ -40,3 +40,7 @@ Hard deletes with cascade can destroy offline edits on other devices. Implement 
 1. Keep 0001 as unexecuted *legacy draft*; when Plan 003 begins, either replace with complete initial schema if never deployed, or add additive migration if deployed.
 2. Design server-side mutation RPC/transaction with per-user op ledger; test replay with changed payload, conflict, foreign-key and cross-user attempts.
 3. Test `anon`, User A and User B read/write/error paths using actual Supabase/Postgres integration harness. Do not report schema verified without executing tests.
+
+## Multi-exercise recording (current branch)
+
+An active workout may exist with no `workout_exercises` yet. Starting it writes one `workouts` row and one outbox operation. Creating a catalog exercise writes `exercises`; attaching it writes `workout_exercises` with a monotonically increasing position. Each saved set refers to the selected relation ID. All writes use one Dexie transaction for entity and outbox, retaining existing UUIDs, revisions, tombstones and RPC payloads. Empty UI rows are drafts only and never enter IndexedDB/outbox. Old single-exercise workouts use the same relations and need no migration. Finishing requires at least one saved set.
