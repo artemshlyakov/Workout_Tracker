@@ -1,5 +1,5 @@
 import { parseReps, parseWeight } from '../../domain/workout'
-import type { WorkoutCommand, WorkoutRepository, WorkoutView } from '../ports/WorkoutRepository'
+import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView } from '../ports/WorkoutRepository'
 import { parseBackup } from './backup'
 import { DEV_WORKSPACE_ID, WorkoutDatabase, type DevBackup, type ExerciseRecord, type ExerciseSetRecord, type OutboxOperation, type WorkoutExerciseRecord, type WorkoutRecord } from './schema'
 
@@ -41,7 +41,7 @@ export class DexieWorkoutRepository implements WorkoutRepository {
       this.db.workoutExercises.where('workspaceId').equals(this.workspaceId).toArray(),
     ])
     const liveRelations = relations.filter((relation) => !relation.deletedAt)
-    const workout = workouts.filter((record) => !record.deletedAt && liveRelations.some((relation) => relation.workoutId === record.id))
+    const workout = workouts.filter((record) => !record.deletedAt && !record.completedAt && liveRelations.some((relation) => relation.workoutId === record.id))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0]
     const workoutExercise = liveRelations.find((relation) => relation.workoutId === workout?.id)
     if (!workout || !workoutExercise) throw new Error('Не удалось загрузить тренировку')
@@ -74,19 +74,71 @@ export class DexieWorkoutRepository implements WorkoutRepository {
 
   async load(): Promise<WorkoutView> {
     await this.initialize()
+    const workouts = await this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray()
+    if (!workouts.some((record) => !record.deletedAt && !record.completedAt)) return { title: '', sets: [], active: false }
     const { workout, workoutExercise } = await this.activeWorkout()
+    const exercise = await this.db.exercises.get(workoutExercise.exerciseId)
+    if (!exercise || exercise.deletedAt || exercise.ownerUserId !== this.ownerUserId) throw new Error('Упражнение тренировки не найдено')
     const records = await this.db.exerciseSets.where('workoutExerciseId').equals(workoutExercise.id).toArray()
-    return { title: workout.title, sets: records.filter((set) => !set.deletedAt)
+    return { title: workout.title, exerciseName: exercise.name, sets: records.filter((set) => !set.deletedAt)
       .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
       .map((set) => ({ id: set.id, weight: String(set.weightCentiKg / 100).replace('.', ','), reps: String(set.reps), position: set.position })) }
   }
 
-  async apply(command: WorkoutCommand): Promise<void> {
-    if (!uuidPattern.test(command.operationId) || ('id' in command && !uuidPattern.test(command.id))) throw new Error('Неверный идентификатор операции')
+  async listJournal(): Promise<JournalView> {
     await this.initialize()
-    await this.db.transaction('rw', this.db.workouts, this.db.workoutExercises, this.db.exerciseSets, this.db.outbox, async () => {
+    return this.db.transaction('r', [this.db.workouts, this.db.exercises, this.db.workoutExercises, this.db.exerciseSets], async () => {
+      const [workouts, exercises, relations, sets] = await Promise.all([
+        this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray(),
+        this.db.exercises.where('workspaceId').equals(this.workspaceId).toArray(),
+        this.db.workoutExercises.where('workspaceId').equals(this.workspaceId).toArray(),
+        this.db.exerciseSets.where('workspaceId').equals(this.workspaceId).toArray(),
+      ])
+      if ([...workouts, ...exercises, ...relations, ...sets].some((row) => row.ownerUserId !== this.ownerUserId)) throw new Error('Данные другого аккаунта в локальном журнале')
+      const liveExercises = exercises.filter((item) => !item.deletedAt)
+      return {
+        exercises: liveExercises.map(({ id, name }) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+        workouts: workouts.filter((workout) => !workout.deletedAt).sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id)).map((workout) => ({
+          id: workout.id, title: workout.title, startedAt: workout.startedAt, completedAt: workout.completedAt,
+          exercises: relations.filter((relation) => !relation.deletedAt && relation.workoutId === workout.id)
+            .sort((a, b) => a.position - b.position)
+            .flatMap((relation) => {
+              const exercise = liveExercises.find((item) => item.id === relation.exerciseId)
+              return exercise ? [{ id: exercise.id, name: exercise.name,
+                sets: sets.filter((set) => !set.deletedAt && set.workoutExerciseId === relation.id)
+                  .sort((a, b) => a.position - b.position).map((set) => ({ weight: set.weightCentiKg / 100, reps: set.reps })) }] : []
+            }),
+        })),
+      }
+    })
+  }
+
+  async apply(command: WorkoutCommand): Promise<void> {
+    if (!uuidPattern.test(command.operationId) || ('id' in command && !uuidPattern.test(command.id)) ||
+      (command.kind === 'startWorkout' && ![command.relationOperationId, command.workoutId, command.relationId].every((value) => uuidPattern.test(value)))) throw new Error('Неверный идентификатор операции')
+    await this.initialize()
+    await this.db.transaction('rw', this.db.workouts, this.db.exercises, this.db.workoutExercises, this.db.exerciseSets, this.db.outbox, async () => {
       if (await this.db.outbox.where('operationId').equals(command.operationId).first()) return
       const time = now()
+      if (command.kind === 'startWorkout') {
+        const active = await this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray()
+        if (active.some((item) => !item.deletedAt && !item.completedAt)) throw new Error('Сначала завершите текущую тренировку')
+        const exercise = (await this.db.exercises.where('workspaceId').equals(this.workspaceId).toArray()).find((item) => !item.deletedAt)
+        if (!exercise) throw new Error('В каталоге нет упражнения')
+        const workout: WorkoutRecord = { ...meta(command.workoutId, time, this.workspaceId, this.ownerUserId), title: 'Силовая тренировка', startedAt: time, completedAt: null }
+        const relation: WorkoutExerciseRecord = { ...meta(command.relationId, time, this.workspaceId, this.ownerUserId), workoutId: workout.id, exerciseId: exercise.id, position: 0 }
+        await this.db.workouts.add(workout)
+        await this.db.workoutExercises.add(relation)
+        await this.db.outbox.bulkAdd([operation('workout', workout, 'upsert', command.operationId), operation('workoutExercise', relation, 'upsert', command.relationOperationId)])
+        return
+      }
+      if (command.kind === 'finishWorkout') {
+        const { workout } = await this.activeWorkout()
+        const completed: WorkoutRecord = { ...workout, completedAt: time, updatedAt: time, localRevision: workout.localRevision + 1 }
+        await this.db.workouts.put(completed)
+        await this.db.outbox.add(operation('workout', completed, 'upsert', command.operationId))
+        return
+      }
       if (command.kind === 'rename') {
         const title = command.title.trim()
         if (!title || title.length > 60) throw new Error('Введите название до 60 символов')

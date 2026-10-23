@@ -95,3 +95,14 @@ it('retries a failed sync without claiming unverified cloud state', async () => 
   expect(container.textContent).not.toContain('A network error')
   expect(state.stops).toContain('A')
 })
+
+it('allows manual sync and retries when the app returns to the foreground', async () => {
+  state.user = 'B'
+  await act(async () => root.render(<AuthGate />))
+  await vi.waitFor(() => expect(state.pushes).toEqual(['B']))
+  expect(container.textContent).toContain('Облачное состояние ещё не проверено')
+  await act(async () => { [...container.querySelectorAll('button')].find((button) => button.textContent === 'Синхронизировать')!.click() })
+  await vi.waitFor(() => expect(state.pushes).toEqual(['B', 'B']))
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+  await vi.waitFor(() => expect(state.pushes).toEqual(['B', 'B', 'B']))
+})
