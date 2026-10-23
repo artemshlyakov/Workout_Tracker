@@ -147,3 +147,32 @@ h3 { margin: 0; font-size: 17px; }
 .progress-bar strong { text-align: right; }
 .finish-button { width: 100%; margin-top: 16px; border: 1px solid var(--border); }
 .finish-button:disabled { opacity: .45; cursor: not-allowed; }
+/* Multi-exercise workout: compact rows and reachable actions. */
+.title-edit { display: flex; align-items: center; gap: 8px; }
+.title-edit input { min-width: 0; }
+.title-edit .button { flex: none; color: var(--action); }
+.title-edit .button:disabled { color: var(--text-secondary); opacity: .65; cursor: default; }
+.workout-summary { display: flex; justify-content: space-between; gap: 8px; margin: 0 2px 14px; color: var(--text-secondary); font-size: 13px; }
+.multi-exercise-card { margin-top: 12px; box-shadow: 0 12px 24px #0002; }
+.multi-exercise-card .exercise-card__heading { margin-bottom: 4px; }
+.multi-exercise-card .exercise-icon { font-size: 24px; }
+.multi-exercise-card .eyebrow { color: var(--action); }
+.set-row--editable { grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) 38px; padding: 7px 6px; gap: 5px; }
+.set-row--editable .numeric-field span { display: block; margin: 0 0 4px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.set-row--editable .numeric-field input { height: 44px; }
+.set-row--editable .delete-button { min-width: 38px; }
+.set-save { grid-column: 2 / -1; min-height: 42px; }
+.set-save:disabled { opacity: .45; }
+.add-exercise-button { width: 100%; min-height: 52px; margin-top: 12px; border: 1px dashed var(--action); color: var(--action); }
+.exercise-picker { display: grid; gap: 12px; margin-top: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--bg-surface); }
+.exercise-picker h2 { font-size: 17px; }
+.exercise-picker label, .start-panel label { color: var(--text-secondary); font-size: 13px; font-weight: 700; }
+.picker-list { display: grid; gap: 5px; max-height: 220px; overflow-y: auto; }
+.picker-list .button { justify-content: space-between; width: 100%; border: 1px solid var(--border); text-align: left; }
+.picker-create { display: flex; gap: 8px; }
+.picker-create input { min-width: 0; }
+.picker-create .button { flex: none; }
+.start-panel { display: grid; gap: 12px; margin-top: 0; }
+.start-panel p { margin: 0; }
+.start-panel .button { min-height: 52px; }
+.start-panel .button:disabled { opacity: .5; }

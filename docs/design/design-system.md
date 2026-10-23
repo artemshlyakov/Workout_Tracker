@@ -51,7 +51,7 @@ Native system fonts (`system-ui`, `-apple-system`, `Segoe UI`, `Roboto`, sans-se
 1. One primary action per view: `Добавить подход` on workout, `Начать тренировку` on home.
 2. Decimal weight accepts dot or comma in input, parses precisely in domain layer; display Russian separator; no negative number; step default 2.5kg but direct input takes precedence.
 3. Repeat last entered weight by default when adding a set; reps remain editable, no silent copy of completed flag.
-4. Set status distinct: completed / planned. For v0.2 demo completion is UI only and must not imply cloud save.
+4. Set status distinct: completed / planned. In the current workout screen, a row is saved only after explicit validation and a successful local transaction; cloud status is reported separately by AuthGate.
 5. On-screen keyboard must not hide the currently edited field or Save/Add control; allow natural scroll.
 6. Support focus-visible, keyboard operation, labels, `aria-live` save states and `prefers-reduced-motion`.
 7. No unnecessary animated background, gradient decoration or heavy charts in active workout.
