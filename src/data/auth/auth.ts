@@ -23,10 +23,16 @@ export async function signIn(email: string, password: string): Promise<void> {
   if (error) throw error
 }
 
-export async function signUp(email: string, password: string): Promise<void> {
+export type SignUpResult = 'signed_in' | 'confirmation_required'
+
+export async function signUp(email: string, password: string): Promise<SignUpResult> {
   const { data, error } = await supabase.auth.signUp({ email, password })
   if (error) throw error
-  if (!data.session) throw new Error('Аккаунт создан без активного сеанса. Проверьте настройки закрытого пилота в Supabase Dashboard')
+  if (data.session) return 'signed_in'
+  // Confirm Email is enabled: Supabase may create the user without signing in.
+  // The response may also be obfuscated for an existing account, so don't assert creation.
+  if (data.user) return 'confirmation_required'
+  throw new Error('Регистрация не была завершена. Повторите попытку позже')
 }
 
 export async function signOut(): Promise<'global' | 'local'> {
@@ -50,5 +56,5 @@ export function authErrorMessage(cause: unknown): string {
     case 'over_email_send_rate_limit': return 'Слишком много запросов. Попробуйте позже'
   }
   if (!navigator.onLine || cause instanceof TypeError) return 'Нет связи с сервером. Проверьте интернет'
-  return cause instanceof Error && cause.message.startsWith('Аккаунт создан без активного сеанса') ? cause.message : 'Не удалось выполнить вход. Попробуйте позже'
+  return 'Не удалось выполнить вход или регистрацию. Попробуйте позже'
 }
