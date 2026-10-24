@@ -6,6 +6,18 @@ from pathlib import Path
 import atexit
 root = Path(__file__).resolve().parents[1]
 fixtures = {'preview-workout.html': '<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body><div id="root"></div><script type="module" src="/src/preview-workout.tsx"></script></body></html>\n', 'src/preview-workout.tsx': "import ReactDOM from 'react-dom/client'\nimport { App } from './app/App'\nimport { DexieWorkoutRepository } from './data/local/DexieWorkoutRepository'\nimport { WorkoutDatabase } from './data/local/schema'\nimport './shared/styles.css'\nconst repository = new DexieWorkoutRepository(new WorkoutDatabase('browser-release-check'), { ownerUserId: '11111111-1111-4111-8111-111111111111' })\nObject.assign(window, { repository })\nReactDOM.createRoot(document.getElementById('root')!).render(<App repository={repository} authenticated />)\n"}
+fixtures['src/preview-workout.tsx'] = fixtures['src/preview-workout.tsx'].replace(
+    "ReactDOM.createRoot(document.getElementById('root')!).render(<App repository={repository} authenticated />)",
+    """import { useState } from 'react'
+import { ThemeToggle, useTheme } from './shared/theme'
+import { ProfileDialog } from './features/auth/AuthGate'
+function Preview() {
+  const { theme, toggle } = useTheme()
+  const [profile, setProfile] = useState(false)
+  return <><header className="account-topbar"><img className="account-topbar__logo" src="/Workout_Tracker/icon-180.png" width="34" height="34" alt="Workout Tracker" /><span className="account-topbar__name">Workout Tracker</span><ThemeToggle theme={theme} onToggle={toggle} /><button className="profile-trigger" aria-label="Открыть профиль" onClick={() => setProfile(true)}>Я</button></header>{profile && <ProfileDialog email="owner@example.test" status="Синхронизировано" stats={{workouts: 2, sets: 6}} importing={false} onClose={() => setProfile(false)} onSignOut={() => {}} onExport={() => {}} onImport={() => {}} />}<App repository={repository} authenticated /></>
+}
+ReactDOM.createRoot(document.getElementById('root')!).render(<Preview />)"""
+)
 for name in fixtures:
     if (root/name).exists(): raise RuntimeError(f'Refusing to overwrite {name}')
 def cleanup():
@@ -21,6 +33,19 @@ with sync_playwright() as p:
   page=context.new_page(); errors=[]
   page.on('pageerror',lambda e:errors.append(str(e)))
   page.goto('http://localhost:5173/Workout_Tracker/preview-workout.html')
+  page.get_by_label('Включить светлую тему').click()
+  assert page.evaluate('document.documentElement.dataset.theme')=='light'
+  assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+  page.get_by_role('button',name='Открыть профиль').click()
+  expect(page.locator('.profile-dialog')).to_be_visible()
+  assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+  page.screenshot(path=f'/tmp/profile-light-{width}.png')
+  page.get_by_role('button',name='Закрыть профиль').click()
+  page.reload()
+  assert page.evaluate('document.documentElement.dataset.theme')=='light'
+  page.get_by_label('Включить тёмную тему').click()
+  assert page.evaluate('document.documentElement.dataset.theme')=='dark'
+
   page.locator('#new-workout-title').fill('Силовая — проверка')
   page.get_by_role('button',name='Начать тренировку').click()
   for name in ('Жим штанги лёжа','Тяга гантели одной рукой','Моё упражнение'):
@@ -31,7 +56,7 @@ with sync_playwright() as p:
    else:
     page.get_by_label('Поиск упражнений').fill(name)
     page.locator('.library-item').first.click()
-    page.get_by_role('button',name='Выбрать упражнение').click()
+    page.get_by_role('button',name='Добавить в тренировку').click()
    expect(page.locator('.library-screen')).to_have_count(0)
   cards=page.locator('.multi-exercise-card'); expect(cards).to_have_count(3)
   for i in range(3):
@@ -55,6 +80,11 @@ with sync_playwright() as p:
   page.get_by_role('button',name='Отменить',exact=True).click()
   expect(cards.nth(1).locator('input[inputmode=numeric]')).to_have_count(2)
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'overflow workout {width}'
+  page.get_by_label('Включить светлую тему').click()
+  page.wait_for_timeout(260)
+  page.screenshot(path=f'/tmp/release-workout-light-{width}.png',full_page=True)
+  assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+  page.get_by_label('Включить тёмную тему').click()
   page.screenshot(path=f'/tmp/release-workout-{width}.png',full_page=True)
   page.get_by_role('button',name='Завершить тренировку').click()
   expect(page.locator('.calendar-card')).to_be_visible()
@@ -81,7 +111,23 @@ with sync_playwright() as p:
   assert page.locator('.library-item').first.locator('img').evaluate('(img)=>img.naturalWidth>0')
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'overflow library {width}'
   page.screenshot(path=f'/tmp/release-library-{width}.png',full_page=True)
+  page.get_by_role('button',name=re.compile(r'Мои \(')).click()
+  page.get_by_role('button',name='Тренировка',exact=True).click()
+  page.get_by_role('button',name='Завершить тренировку').click()
+  page.get_by_role('button',name='Упражнения',exact=True).click()
+  expect(page.locator('.library-screen')).to_be_visible()
+  page.get_by_role('button',name=re.compile(r'Мои \(')).click(timeout=3000)
+  page.on('dialog', lambda dialog: dialog.accept())
+  page.get_by_role('button',name='Убрать Моё упражнение из моих упражнений').click()
+  expect(page.get_by_role('button',name='Убрать Моё упражнение из моих упражнений')).to_have_count(0)
+  page.get_by_role('button',name='История',exact=True).click()
+  page.locator('.history-item').first.click()
+  assert 'Моё упражнение' in page.locator('.journal-screen').inner_text()
+  expect(page.get_by_role('button',name='Исправить запись')).to_be_disabled()
+  page.get_by_role('button',name='Прогресс',exact=True).click()
+  expect(page.locator('#progress-exercise option').filter(has_text='Моё упражнение · архив')).to_have_count(1)
+
   assert not errors,errors
-  print(width,'PASS: 3 exercises, 6 sets, draft reload, delete/undo, completion/history, repeat, offline write, export, images, overflow, JS errors')
+  print(width,'PASS: 3 exercises, 6 sets, draft reload, completion/history, repeat, offline write, archive/history/progress, both themes/profile, images, no overflow/errors')
   context.close()
  browser.close()

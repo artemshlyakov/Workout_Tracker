@@ -78,7 +78,7 @@ export class DexieWorkoutRepository implements WorkoutRepository {
       .filter((relation) => !relation.deletedAt).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
     const exercises = await Promise.all(relations.map(async (relation) => {
       const exercise = await this.db.exercises.get(relation.exerciseId)
-      if (!exercise || exercise.deletedAt || exercise.ownerUserId !== this.ownerUserId || relation.ownerUserId !== this.ownerUserId) throw new Error('Упражнение тренировки не найдено')
+      if (!exercise || exercise.ownerUserId !== this.ownerUserId || relation.ownerUserId !== this.ownerUserId) throw new Error('Упражнение тренировки не найдено')
       const records = await this.db.exerciseSets.where('workoutExerciseId').equals(relation.id).toArray()
       if (records.some((set) => set.ownerUserId !== this.ownerUserId)) throw new Error('Подход другого аккаунта')
       return { relationId: relation.id, exerciseId: exercise.id, name: exercise.name,
@@ -106,7 +106,7 @@ export class DexieWorkoutRepository implements WorkoutRepository {
           exercises: relations.filter((relation) => !relation.deletedAt && relation.workoutId === workout.id)
             .sort((a, b) => a.position - b.position)
             .flatMap((relation) => {
-              const exercise = liveExercises.find((item) => item.id === relation.exerciseId)
+              const exercise = exercises.find((item) => item.id === relation.exerciseId)
               return exercise ? [{ id: exercise.id, name: exercise.name,
                 sets: sets.filter((set) => !set.deletedAt && set.workoutExerciseId === relation.id)
                   .sort((a, b) => a.position - b.position).map((set) => ({ weight: set.weightCentiKg / 100, reps: set.reps })) }] : []
@@ -157,6 +157,9 @@ export class DexieWorkoutRepository implements WorkoutRepository {
         if (all.some((item) => !item.deletedAt && !item.completedAt)) throw new Error('Сначала завершите текущую тренировку')
         const workout = all.find((item) => item.id === command.workoutId && !item.deletedAt)
         if (!workout) throw new Error('Тренировка не найдена')
+        const relations = (await this.db.workoutExercises.where('workoutId').equals(workout.id).toArray()).filter((item) => !item.deletedAt)
+        const linked = await Promise.all(relations.map((item) => this.db.exercises.get(item.exerciseId)))
+        if (linked.some((item) => !item || item.deletedAt)) throw new Error('В тренировке есть архивное упражнение. Повторите её состав для новой записи')
         const updated = { ...workout, editingCompletedAt: workout.completedAt ?? undefined, completedAt: null, updatedAt: time, localRevision: workout.localRevision + 1 }
         await this.db.workouts.put(updated)
         await this.db.outbox.add(operation('workout', updated, 'upsert', command.operationId))
@@ -212,6 +215,18 @@ export class DexieWorkoutRepository implements WorkoutRepository {
         const exercise: ExerciseRecord = { ...meta(command.exerciseId, time, this.workspaceId, this.ownerUserId), name }
         await this.db.exercises.add(exercise)
         await this.db.outbox.add(operation('exercise', exercise, 'upsert', command.operationId))
+        return
+      }
+      if (command.kind === 'archiveExercise') {
+        const exercise = await this.db.exercises.get(command.exerciseId)
+        if (!exercise || exercise.deletedAt || exercise.workspaceId !== this.workspaceId || exercise.ownerUserId !== this.ownerUserId) throw new Error('Упражнение не найдено в личном каталоге')
+        const active = await this.db.workouts.where('workspaceId').equals(this.workspaceId).toArray()
+        const activeIds = new Set(active.filter((item) => !item.deletedAt && !item.completedAt).map((item) => item.id))
+        const relations = await this.db.workoutExercises.where('exerciseId').equals(exercise.id).toArray()
+        if (relations.some((item) => !item.deletedAt && activeIds.has(item.workoutId))) throw new Error('Сначала уберите упражнение из текущей тренировки')
+        const archived = { ...exercise, deletedAt: time, updatedAt: time, localRevision: exercise.localRevision + 1 }
+        await this.db.exercises.put(archived)
+        await this.db.outbox.add(operation('exercise', archived, 'delete', command.operationId))
         return
       }
       if (command.kind === 'addExercise') {
@@ -336,7 +351,8 @@ export class DexieWorkoutRepository implements WorkoutRepository {
       const time = now()
       const exerciseMap = new Map<string, string>()
       const catalog = await this.db.exercises.where('workspaceId').equals(this.workspaceId).toArray()
-      for (const exercise of backup.exercises.filter((row) => !row.deletedAt)) {
+      const neededExerciseIds = new Set(backup.workoutExercises.filter((row) => !row.deletedAt && source.some((workout) => workout.id === row.workoutId)).map((row) => row.exerciseId))
+      for (const exercise of backup.exercises.filter((row) => !row.deletedAt || neededExerciseIds.has(row.id))) {
         const existing = catalog.find((row) => !row.deletedAt && row.name.toLocaleLowerCase('ru') === exercise.name.toLocaleLowerCase('ru'))
         if (existing) { exerciseMap.set(exercise.id, existing.id); continue }
         const copy: ExerciseRecord = { ...meta(uuid(), time, this.workspaceId, this.ownerUserId), name: exercise.name }

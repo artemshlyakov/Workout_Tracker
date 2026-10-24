@@ -4,7 +4,7 @@
 
 ## 0. App shell / navigation
 
-Four tabs: `Тренировка`, `История`, `Упражнения`, `Прогресс`; settings available from header. Tabs have a visible active indicator and text labels. No inert actions; unreleased screens display explanatory empty states. Responsive at 360×800 and 390×844.
+Four tabs: `Тренировка`, `История`, `Упражнения`, `Прогресс`; profile available from header. Tabs have a visible active indicator and text labels. No inert actions; unreleased screens display explanatory empty states. Responsive at 360×800 and 390×844.
 
 ## 1. Active workout — the most important screen
 
@@ -57,3 +57,9 @@ Start with a required user-provided workout name; no catalog exercise is inserte
 ## Plan 006
 
 Календарь, фильтр дня, повтор/исправление записи, справочник с изображениями и фильтрами, предыдущий вес, черновики, отдых и интервалы 30/90 дней реализованы. Пользовательский контракт и ограничения: `../operations/personal-diary.md`. Актуальные снимки: `../screenshots/diary-{workout,history,library}-390.png` — локальный тестовый owner без облачного входа.
+
+## Plan 007
+
+В шапке журнала доступны тема и профиль. В «Моих упражнениях» каждую запись можно убрать; активная тренировка защищена, завершённая история сохраняет упражнение. Профиль показывает реальные счётчики, email и состояние синхронизации. Резервные копии скрыты в разделе данных профиля.
+
+Локальные визуальные проверки Plan 007: `../screenshots/profile-light-local-390.png` и `../screenshots/workout-light-local-390.png`. В профиле на скриншоте тестовые счётчики; production вычисляет их по пользовательскому журналу.

@@ -7,6 +7,7 @@ import { CloudSync, type PushResult } from '../../data/cloud/sync'
 import { DexieWorkoutRepository } from '../../data/local/DexieWorkoutRepository'
 import { WorkoutDatabase } from '../../data/local/schema'
 import { Button } from '../../shared/Button'
+import { ThemeToggle, useTheme, type Theme } from '../../shared/theme'
 import { ConflictPanel } from './ConflictPanel'
 import { AuthForm } from './AuthForm'
 
@@ -34,6 +35,7 @@ export function statusText(status: SyncStatus): string {
 
 export function AuthGate() {
   const [auth, setAuth] = useState<AuthState | null>(null)
+  const { theme, toggle } = useTheme()
   const [notice, setNotice] = useState<string | null>(null)
   const [generation, setGeneration] = useState(0)
   const authVersion = useRef(0)
@@ -63,17 +65,17 @@ export function AuthGate() {
   }, [generation])
 
   if (!auth) return <main className="app-shell"><p role="status">Проверяем сеанс…</p></main>
-  if (auth.kind === 'SIGNED_OUT') return <AuthForm notice={notice} onSuccess={() => { setNotice(null); authVersion.current++; setGeneration((n) => n + 1) }} />
+  if (auth.kind === 'SIGNED_OUT') return <AuthForm theme={theme} onThemeToggle={toggle} notice={notice} onSuccess={() => { setNotice(null); authVersion.current++; setGeneration((n) => n + 1) }} />
   const owner = workspaceOwner(auth)
   if (!owner) return null
-  return <AccountWorkspace key={owner} auth={auth} onSignOut={(message) => {
+  return <AccountWorkspace key={owner} auth={auth} theme={theme} onThemeToggle={toggle} onSignOut={(message) => {
     authVersion.current++
     setAuth({ kind: 'SIGNED_OUT' })
     setNotice(message)
   }} onRecheck={() => { authVersion.current++; setGeneration((n) => n + 1) }} />
 }
 
-function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthState, { kind: 'SIGNED_OUT' }>; onSignOut: (message: string | null) => void; onRecheck: () => void }) {
+function AccountWorkspace({ auth, theme, onThemeToggle, onSignOut, onRecheck }: { auth: Exclude<AuthState, { kind: 'SIGNED_OUT' }>; theme: Theme; onThemeToggle: () => void; onSignOut: (message: string | null) => void; onRecheck: () => void }) {
   const owner = auth.user.id
   const repository = useMemo(() => new DexieWorkoutRepository(new WorkoutDatabase(`workout-tracker-auth-${owner}`), { ownerUserId: owner }), [owner])
   const syncRef = useRef<CloudSync | null>(null)
@@ -89,6 +91,8 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const importFile = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [profileStats, setProfileStats] = useState<{ workouts: number; sets: number } | null>(null)
 
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
   useEffect(() => {
@@ -207,13 +211,14 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
   }
 
   return <>
-    <details className="account-settings">
-      <summary><span className="brand-mark">W<span> / </span>T</span><span>Аккаунт и данные</span><span aria-hidden="true">⌄</span></summary>
-      <div className="account-settings__body"><strong>{auth.user.email ?? 'Личный аккаунт'}</strong><p>На iPhone: Safari → «Поделиться» → «На экран Домой». Для первого входа нужен интернет.</p><div className="backup-actions">
-        <Button variant="quiet" onClick={() => void handleExport()}>Экспорт JSON</Button>
-        <Button variant="quiet" disabled={importing} onClick={() => importFile.current?.click()}>{importing ? 'Восстановление…' : 'Восстановить копию'}</Button>
-      </div><input ref={importFile} type="file" accept="application/json,.json" className="visually-hidden" aria-label="Выбрать личную резервную копию" onChange={(event) => void handleImport(event.target.files?.[0])} /><p>Экспорт содержит записанные тренировки. Незавершённый ввод хранится отдельно на устройстве.</p><Button variant="quiet" onClick={() => void handleSignOut()}>Выйти из аккаунта</Button></div>
-    </details>
+    <header className="account-topbar">
+      <img className="account-topbar__logo" src={`${import.meta.env.BASE_URL}icon-180.png`} width="34" height="34" alt="Workout Tracker" />
+      <span className="account-topbar__name">Workout Tracker</span>
+      <ThemeToggle theme={theme} onToggle={onThemeToggle} />
+      <button className="profile-trigger" type="button" aria-label="Открыть профиль" onClick={() => { setProfileStats(null); void repository.listJournal().then((journal) => setProfileStats({ workouts: journal.workouts.filter((item) => item.completedAt).length, sets: journal.workouts.filter((item) => item.completedAt).reduce((total, item) => total + item.exercises.reduce((count, exercise) => count + exercise.sets.length, 0), 0) })).catch(() => {}); setProfileOpen(true) }}>{auth.user.email?.charAt(0).toLocaleUpperCase() ?? 'Я'}</button>
+    </header>
+    {profileOpen && <ProfileDialog email={auth.user.email ?? 'Личный аккаунт'} createdAt={auth.user.created_at} status={statusText(status)} stats={profileStats} importing={importing} onClose={() => setProfileOpen(false)} onSignOut={() => void handleSignOut()} onExport={() => void handleExport()} onImport={() => importFile.current?.click()} />}
+    <input ref={importFile} type="file" accept="application/json,.json" className="visually-hidden" aria-label="Выбрать личную резервную копию" onChange={(event) => void handleImport(event.target.files?.[0])} />
     {auth.kind === 'AUTH_RECHECK_REQUIRED' && <div className="auth-notice" role="alert">Сеанс нужно проверить онлайн. Локальные записи сохранены, отправка остановлена. <Button variant="quiet" onClick={onRecheck}>Повторить</Button></div>}
     {auth.kind === 'SIGNED_IN_OFFLINE_CACHED' && <div className="auth-notice" role="status">Офлайн · записи сохраняются на устройстве</div>}
     {error && <div className="auth-notice" role="alert">{error}</div>}
@@ -224,4 +229,17 @@ function AccountWorkspace({ auth, onSignOut, onRecheck }: { auth: Exclude<AuthSt
       writeTimer.current = setTimeout(() => void syncAfterWrite(), 250)
     }} onDraftStateChange={setDraftUnsaved} /> : <main className="app-shell"><p role="status">Загружаем личный журнал…</p></main>}
   </>
+}
+
+export function ProfileDialog({ email, createdAt, status, stats, importing, onClose, onSignOut, onExport, onImport }: { email: string; createdAt?: string; status: string; stats: { workouts: number; sets: number } | null; importing: boolean; onClose: () => void; onSignOut: () => void; onExport: () => void; onImport: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => { if (typeof ref.current?.showModal === 'function') ref.current.showModal(); else ref.current?.setAttribute('open', '') }, [])
+  return <dialog className="profile-dialog" ref={ref} onCancel={onClose} aria-labelledby="profile-title"><div className="profile-dialog__heading"><span className="profile-dialog__eyebrow">ЛИЧНОЕ ПРОСТРАНСТВО</span><button type="button" className="profile-dialog__close" aria-label="Закрыть профиль" onClick={onClose}>×</button></div>
+    <div className="profile-identity"><span className="profile-identity__avatar">{email.charAt(0).toLocaleUpperCase()}</span><div><h2 id="profile-title">Ваш профиль</h2><p>{email}</p></div></div>
+    <div className="profile-stats"><div><strong>{stats?.workouts ?? '—'}</strong><span>тренировок</span></div><div><strong>{stats?.sets ?? '—'}</strong><span>подходов</span></div></div>
+    <div className="profile-details"><p><span>Синхронизация</span><strong>{status}</strong></p>{createdAt && <p><span>С нами с</span><strong>{new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(createdAt))}</strong></p>}</div>
+    <p className="profile-install">На iPhone: Safari → «Поделиться» → «На экран Домой».</p>
+    <details className="profile-backup"><summary>Данные и резервная копия <span aria-hidden="true">⌄</span></summary><p>Обычно записи хранятся в облаке. Копия пригодится при редком конфликте или очистке данных браузера.</p><div className="backup-actions"><Button variant="quiet" onClick={onExport}>Скачать копию</Button><Button variant="quiet" disabled={importing} onClick={onImport}>{importing ? 'Восстановление…' : 'Восстановить'}</Button></div></details>
+    <Button className="profile-signout" variant="quiet" onClick={onSignOut}>Выйти из аккаунта</Button>
+  </dialog>
 }
