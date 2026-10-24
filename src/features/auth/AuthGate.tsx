@@ -6,6 +6,7 @@ import { supabase } from '../../data/cloud/client'
 import { CloudSync, type PushResult } from '../../data/cloud/sync'
 import { DexieWorkoutRepository } from '../../data/local/DexieWorkoutRepository'
 import { WorkoutDatabase } from '../../data/local/schema'
+import type { BodyProfile } from '../../data/ports/WorkoutRepository'
 import { Button } from '../../shared/Button'
 import { ThemeToggle, useTheme, type Theme } from '../../shared/theme'
 import { ConflictPanel } from './ConflictPanel'
@@ -92,6 +93,7 @@ function AccountWorkspace({ auth, theme, onThemeToggle, onSignOut, onRecheck }: 
   const importFile = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [bodyProfile, setBodyProfile] = useState<BodyProfile | null>(null)
   const [profileStats, setProfileStats] = useState<{ workouts: number; sets: number } | null>(null)
 
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -215,9 +217,9 @@ function AccountWorkspace({ auth, theme, onThemeToggle, onSignOut, onRecheck }: 
       <img className="account-topbar__logo" src={`${import.meta.env.BASE_URL}icon-180.png`} width="34" height="34" alt="Workout Tracker" />
       <span className="account-topbar__name">Workout Tracker</span>
       <ThemeToggle theme={theme} onToggle={onThemeToggle} />
-      <button className="profile-trigger" type="button" aria-label="Открыть профиль" onClick={() => { setProfileStats(null); void repository.listJournal().then((journal) => setProfileStats({ workouts: journal.workouts.filter((item) => item.completedAt).length, sets: journal.workouts.filter((item) => item.completedAt).reduce((total, item) => total + item.exercises.reduce((count, exercise) => count + exercise.sets.length, 0), 0) })).catch(() => {}); setProfileOpen(true) }}>{auth.user.email?.charAt(0).toLocaleUpperCase() ?? 'Я'}</button>
+      <button className="profile-trigger" type="button" aria-label="Открыть профиль" onClick={() => { setProfileStats(null); void repository.loadBodyProfile().then(setBodyProfile).catch(() => {}); void repository.listJournal().then((journal) => setProfileStats({ workouts: journal.workouts.filter((item) => item.completedAt).length, sets: journal.workouts.filter((item) => item.completedAt).reduce((total, item) => total + item.exercises.reduce((count, exercise) => count + exercise.sets.length, 0), 0) })).catch(() => {}); setProfileOpen(true) }}>{auth.user.email?.charAt(0).toLocaleUpperCase() ?? 'Я'}</button>
     </header>
-    {profileOpen && <ProfileDialog email={auth.user.email ?? 'Личный аккаунт'} createdAt={auth.user.created_at} status={statusText(status)} stats={profileStats} importing={importing} onClose={() => setProfileOpen(false)} onSignOut={() => void handleSignOut()} onExport={() => void handleExport()} onImport={() => importFile.current?.click()} />}
+    {profileOpen && <ProfileDialog email={auth.user.email ?? 'Личный аккаунт'} createdAt={auth.user.created_at} status={statusText(status)} stats={profileStats} bodyProfile={bodyProfile} onSaveBody={async (value) => { await repository.saveBodyProfile(value); setBodyProfile(value) }} importing={importing} onClose={() => setProfileOpen(false)} onSignOut={() => void handleSignOut()} onExport={() => void handleExport()} onImport={() => importFile.current?.click()} />}
     <input ref={importFile} type="file" accept="application/json,.json" className="visually-hidden" aria-label="Выбрать личную резервную копию" onChange={(event) => void handleImport(event.target.files?.[0])} />
     {auth.kind === 'AUTH_RECHECK_REQUIRED' && <div className="auth-notice" role="alert">Сеанс нужно проверить онлайн. Локальные записи сохранены, отправка остановлена. <Button variant="quiet" onClick={onRecheck}>Повторить</Button></div>}
     {auth.kind === 'SIGNED_IN_OFFLINE_CACHED' && <div className="auth-notice" role="status">Офлайн · записи сохраняются на устройстве</div>}
@@ -231,13 +233,18 @@ function AccountWorkspace({ auth, theme, onThemeToggle, onSignOut, onRecheck }: 
   </>
 }
 
-export function ProfileDialog({ email, createdAt, status, stats, importing, onClose, onSignOut, onExport, onImport }: { email: string; createdAt?: string; status: string; stats: { workouts: number; sets: number } | null; importing: boolean; onClose: () => void; onSignOut: () => void; onExport: () => void; onImport: () => void }) {
+export function ProfileDialog({ email, createdAt, status, stats, bodyProfile, onSaveBody, importing, onClose, onSignOut, onExport, onImport }: { email: string; createdAt?: string; status: string; stats: { workouts: number; sets: number } | null; bodyProfile?: BodyProfile | null; onSaveBody?: (value: BodyProfile) => Promise<void>; importing: boolean; onClose: () => void; onSignOut: () => void; onExport: () => void; onImport: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const [height, setHeight] = useState('')
+  const [bodyWeight, setBodyWeight] = useState('')
+  const [bodyMessage, setBodyMessage] = useState('')
+  useEffect(() => { setHeight(bodyProfile?.heightCm?.toString() ?? ''); setBodyWeight(bodyProfile?.bodyWeightKg?.toString() ?? '') }, [bodyProfile])
   useEffect(() => { if (typeof ref.current?.showModal === 'function') ref.current.showModal(); else ref.current?.setAttribute('open', '') }, [])
   return <dialog className="profile-dialog" ref={ref} onCancel={onClose} aria-labelledby="profile-title"><div className="profile-dialog__heading"><span className="profile-dialog__eyebrow">ЛИЧНОЕ ПРОСТРАНСТВО</span><button type="button" className="profile-dialog__close" aria-label="Закрыть профиль" onClick={onClose}>×</button></div>
     <div className="profile-identity"><span className="profile-identity__avatar">{email.charAt(0).toLocaleUpperCase()}</span><div><h2 id="profile-title">Ваш профиль</h2><p>{email}</p></div></div>
     <div className="profile-stats"><div><strong>{stats?.workouts ?? '—'}</strong><span>тренировок</span></div><div><strong>{stats?.sets ?? '—'}</strong><span>подходов</span></div></div>
     <div className="profile-details"><p><span>Синхронизация</span><strong>{status}</strong></p>{createdAt && <p><span>С нами с</span><strong>{new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(createdAt))}</strong></p>}</div>
+    {onSaveBody && <section className="profile-body"><h3>Параметры тела</h3><p>Личная заметка на этом устройстве; на расчёт рабочих весов не влияет.</p><div><label>Рост, см<input className="search-input" type="number" inputMode="numeric" min="80" max="250" value={height} onChange={(event) => setHeight(event.target.value)} /></label><label>Вес, кг<input className="search-input" type="number" inputMode="decimal" min="20" max="400" step="0.1" value={bodyWeight} onChange={(event) => setBodyWeight(event.target.value)} /></label></div><Button variant="quiet" onClick={() => void onSaveBody({ heightCm: height ? Number(height) : null, bodyWeightKg: bodyWeight ? Number(bodyWeight) : null }).then(() => setBodyMessage('Параметры сохранены на устройстве')).catch((cause: unknown) => setBodyMessage(cause instanceof Error ? cause.message : 'Не удалось сохранить'))}>Сохранить параметры</Button>{bodyMessage && <p role="status">{bodyMessage}</p>}</section>}
     <p className="profile-install">На iPhone: Safari → «Поделиться» → «На экран Домой».</p>
     <details className="profile-backup"><summary>Данные и резервная копия <span aria-hidden="true">⌄</span></summary><p>Обычно записи хранятся в облаке. Копия пригодится при редком конфликте или очистке данных браузера.</p><div className="backup-actions"><Button variant="quiet" onClick={onExport}>Скачать копию</Button><Button variant="quiet" disabled={importing} onClick={onImport}>{importing ? 'Восстановление…' : 'Восстановить'}</Button></div></details>
     <Button className="profile-signout" variant="quiet" onClick={onSignOut}>Выйти из аккаунта</Button>

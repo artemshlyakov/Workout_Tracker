@@ -12,6 +12,8 @@ export interface Workspace {
   lastActiveAt: string
   draft?: WorkoutDraftState | null
   importedCopies?: string[]
+  heightCm?: number | null
+  bodyWeightKg?: number | null
 }
 
 interface RecordMeta {
@@ -32,6 +34,7 @@ export interface WorkoutRecord extends RecordMeta {
   editingCompletedAt?: string
 }
 
+export interface TrainingPlanRecord extends RecordMeta { title: string; exerciseNames: string[] }
 export interface ExerciseRecord extends RecordMeta { name: string }
 export interface WorkoutExerciseRecord extends RecordMeta {
   workoutId: string
@@ -49,10 +52,10 @@ export interface OutboxOperation {
   operationId: string
   workspaceId: string
   ownerUserId: string | null
-  entityType: 'workout' | 'exercise' | 'workoutExercise' | 'exerciseSet'
+  entityType: 'workout' | 'exercise' | 'workoutExercise' | 'exerciseSet' | 'trainingPlan'
   entityId: string
   action: 'upsert' | 'delete'
-  snapshot: WorkoutRecord | ExerciseRecord | WorkoutExerciseRecord | ExerciseSetRecord
+  snapshot: WorkoutRecord | ExerciseRecord | WorkoutExerciseRecord | ExerciseSetRecord | TrainingPlanRecord
   baseServerRevision: number | null
   status: 'pending' | 'conflict'
   attempts: number
@@ -74,6 +77,7 @@ export interface DevBackup {
   exercises: ExerciseRecord[]
   workoutExercises: WorkoutExerciseRecord[]
   exerciseSets: ExerciseSetRecord[]
+  trainingPlans?: TrainingPlanRecord[]
   outbox: OutboxOperation[]
   syncState: SyncState
 }
@@ -81,6 +85,7 @@ export interface DevBackup {
 export class WorkoutDatabase extends Dexie {
   workspaces!: Table<Workspace, string>
   workouts!: Table<WorkoutRecord, string>
+  trainingPlans!: Table<TrainingPlanRecord, string>
   exercises!: Table<ExerciseRecord, string>
   workoutExercises!: Table<WorkoutExerciseRecord, string>
   exerciseSets!: Table<ExerciseSetRecord, string>
@@ -97,6 +102,11 @@ export class WorkoutDatabase extends Dexie {
       exerciseSets: 'id, workspaceId, workoutExerciseId',
       outbox: '++sequence, &operationId, workspaceId, entityId, createdAt',
       syncState: 'workspaceId',
+    })
+    this.version(2).stores({
+      workspaces: 'id', workouts: 'id, workspaceId', exercises: 'id, workspaceId',
+      workoutExercises: 'id, workspaceId, workoutId, exerciseId', exerciseSets: 'id, workspaceId, workoutExerciseId',
+      trainingPlans: 'id, workspaceId', outbox: '++sequence, &operationId, workspaceId, entityId, createdAt', syncState: 'workspaceId',
     })
   }
 }

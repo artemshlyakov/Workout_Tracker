@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DexieWorkoutRepository } from './DexieWorkoutRepository'
 import { WorkoutDatabase } from './schema'
@@ -99,6 +100,68 @@ describe('multi-exercise workout repository', () => {
     expect(await restored.importData(json)).toEqual(initial)
     expect(await restored.db.outbox.count()).toBe(6)
     legacy.db.close(); await legacy.db.delete(); restored.db.close(); await restored.db.delete()
+  })
+})
+
+describe('saved workouts', () => {
+  it('upgrades a v1 IndexedDB without losing its workout or pending operation', async () => {
+    const name = `upgrade-${id()}`, workoutId = id(), operationId = id(), time = new Date().toISOString()
+    const legacy = new Dexie(name)
+    legacy.version(1).stores({ workspaces: 'id', workouts: 'id, workspaceId', exercises: 'id, workspaceId', workoutExercises: 'id, workspaceId, workoutId, exerciseId', exerciseSets: 'id, workspaceId, workoutExerciseId', outbox: '++sequence, &operationId, workspaceId, entityId, createdAt', syncState: 'workspaceId' })
+    const workout = { id: workoutId, workspaceId: owner, ownerUserId: owner, serverRevision: null, localRevision: 1, createdAt: time, updatedAt: time, deletedAt: null, title: 'Старая запись', startedAt: time, completedAt: null }
+    await legacy.table('workspaces').add({ id: owner, mode: 'authenticated', ownerUserId: owner, createdAt: time, lastActiveAt: time })
+    await legacy.table('syncState').add({ workspaceId: owner, ownerUserId: owner, cursor: null, lastAckAt: null })
+    await legacy.table('workouts').add(workout)
+    await legacy.table('outbox').add({ operationId, workspaceId: owner, ownerUserId: owner, entityType: 'workout', entityId: workoutId, action: 'upsert', snapshot: workout, baseServerRevision: null, status: 'pending', attempts: 0, lastError: null, createdAt: time })
+    legacy.close()
+    const upgraded = new DexieWorkoutRepository(new WorkoutDatabase(name), { ownerUserId: owner })
+    expect((await upgraded.load()).title).toBe('Старая запись')
+    expect(await upgraded.listPlans()).toEqual([])
+    expect((await upgraded.db.outbox.toArray()).map((row) => row.operationId)).toEqual([operationId])
+    upgraded.db.close(); await upgraded.db.delete()
+  })
+
+  it('keeps an edited plan, starts three exercises without sets, and preserves history after deletion', async () => {
+    const planId = id()
+    await repository.savePlan({ id: planId, title: 'Мой день', exerciseNames: ['Жим', 'Тяга', 'Присед'] }, id())
+    expect((await db.outbox.toArray()).at(-1)).toMatchObject({ entityType: 'trainingPlan', action: 'upsert' })
+    db.close()
+    const reopened = new DexieWorkoutRepository(new WorkoutDatabase(db.name), { ownerUserId: owner })
+    expect(await reopened.listPlans()).toEqual([{ id: planId, title: 'Мой день', exerciseNames: ['Жим', 'Тяга', 'Присед'] }])
+    await reopened.savePlan({ id: planId, title: 'Новый день', exerciseNames: ['Присед', 'Жим', 'Тяга'] }, id())
+    const [plan] = await reopened.listPlans()
+    await reopened.apply({ kind: 'startWorkout', operationId: id(), workoutId: id(), title: plan.title, exerciseNames: plan.exerciseNames })
+    const active = await reopened.load()
+    expect(active.exercises.map((exercise) => [exercise.name, exercise.sets.length])).toEqual([['Присед', 0], ['Жим', 0], ['Тяга', 0]])
+    await reopened.apply({ kind: 'saveSet', operationId: id(), id: id(), relationId: active.exercises[0].relationId, weight: '70', reps: '8', position: 0 })
+    await reopened.apply({ kind: 'finishWorkout', operationId: id() })
+    await reopened.deletePlan(planId, id())
+    expect(await reopened.listPlans()).toEqual([])
+    expect((await reopened.listJournal()).workouts[0]).toMatchObject({ title: 'Новый день', exercises: [{ name: 'Присед', sets: [{ weight: 70, reps: 8 }] }, { name: 'Жим', sets: [] }, { name: 'Тяга', sets: [] }] })
+    expect((await reopened.db.outbox.toArray()).filter((operation) => operation.entityType === 'trainingPlan').map((operation) => operation.action)).toEqual(['upsert', 'upsert', 'delete'])
+    reopened.db.close()
+  })
+
+  it('restores saved workouts as new copies, including a backup made before this feature', async () => {
+    const planId = id()
+    await repository.savePlan({ id: planId, title: 'План', exerciseNames: ['Жим'] }, id())
+    const backup = await repository.exportAccountData()
+    expect(await repository.importAccountData(backup)).toBe(0)
+    expect((await repository.listPlans()).map((plan) => plan.title)).toEqual(['План', 'План'])
+    expect((await db.outbox.toArray()).filter((operation) => operation.entityType === 'trainingPlan')).toHaveLength(2)
+    const oldBackup = JSON.parse(backup)
+    delete oldBackup.trainingPlans
+    expect(await repository.importAccountData(JSON.stringify(oldBackup))).toBe(0)
+    expect((await repository.listPlans()).length).toBe(2)
+  })
+
+  it('stores height and body weight for the current workspace', async () => {
+    await repository.saveBodyProfile({ heightCm: 180, bodyWeightKg: 79.5 })
+    db.close()
+    const reopened = new DexieWorkoutRepository(new WorkoutDatabase(db.name), { ownerUserId: owner })
+    expect(await reopened.loadBodyProfile()).toEqual({ heightCm: 180, bodyWeightKg: 79.5 })
+    await expect(reopened.saveBodyProfile({ heightCm: 500, bodyWeightKg: 79.5 })).rejects.toThrow('рост и вес')
+    reopened.db.close()
   })
 })
 

@@ -395,3 +395,29 @@ body, .bottom-nav, .workout-title-card, .exercise-card, .journal-card, .calendar
 body::before { content: ''; position: fixed; z-index: 20; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: var(--bg-canvas); pointer-events: none; }
 :root[data-theme="light"] body::before { background: #090d12; }
 @media (prefers-reduced-motion: reduce) { .button:active:not(:disabled), .routine-card:active:not(:disabled), .library-item:active:not(:disabled) { transform: none; } }
+.saved-plans { display: grid; gap: 10px; margin: 0 0 20px; }
+.saved-plans .section-heading { margin-bottom: 2px; }
+.saved-plan-card { padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-surface); }
+.saved-plan-card > div:first-child { display: grid; gap: 6px; }
+.saved-plan-card strong { font-size: 18px; }
+.saved-plan-card span { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.saved-plan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 12px; }
+.saved-plan-actions .button:first-child { flex: 1; }
+.plan-editor { display: grid; gap: 12px; }
+.plan-selected { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.plan-selected li { display: flex; align-items: center; min-height: 52px; padding-left: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); }
+.plan-selected li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.plan-selected .button { padding: 0; }
+.plan-results { display: grid; max-height: 230px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; }
+.plan-results button { min-height: 44px; border: 0; border-bottom: 1px solid var(--border); background: var(--bg-surface); color: var(--text-primary); text-align: left; padding: 8px 12px; }
+.plan-results button:disabled { color: var(--text-secondary); }
+.plan-custom { display: flex; gap: 6px; }
+.plan-custom input { min-width: 0; }
+.profile-body { margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; }
+.profile-body h3 { font-size: 16px; }
+.profile-body p { color: var(--text-secondary); font-size: 12px; }
+.profile-body > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.profile-body label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; }
+.profile-body .button { margin-top: 8px; }
+.history-item--day { min-height: 64px; border-color: var(--border-info); }
+.history-item--day .history-detail strong { font-size: 17px; }

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { parseReps, parseWeight } from '../domain/workout'
 import { localDay, previousExercise } from '../domain/history'
-import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView } from '../data/ports/WorkoutRepository'
+import type { JournalView, WorkoutCommand, WorkoutRepository, WorkoutView, TrainingPlanView } from '../data/ports/WorkoutRepository'
 import { Button } from '../shared/Button'
 import { ProgressScreen } from '../features/journal/JournalScreens'
 import { CalendarHistory } from '../features/journal/CalendarHistory'
 import { ExerciseImage, ExerciseLibrary } from '../features/library/ExerciseLibrary'
-import { exerciseInfo, starterRoutines } from '../data/catalog/library'
+import { exerciseInfo } from '../data/catalog/library'
 import { RestTimer } from '../features/workout/RestTimer'
+import { TrainingPlanEditor } from '../features/workout/TrainingPlanEditor'
 
 type Tab = 'workout' | 'history' | 'exercises' | 'progress'
 type Draft = { id: string; weight: string; reps: string; position: number; saved: boolean; dirty: boolean }
@@ -37,6 +38,8 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
   const [newTitle, setNewTitle] = useState('')
   const [picker, setPicker] = useState(false)
   const [tab, setTab] = useState<Tab>(initialTab)
+  const [plans, setPlans] = useState<TrainingPlanView[]>([])
+  const [editingPlan, setEditingPlan] = useState<TrainingPlanView | 'new' | null>(null)
   const [journal, setJournal] = useState<JournalView>({ workouts: [], exercises: [] })
   const [busy, setBusy] = useState(false)
   const lock = useRef(false)
@@ -47,7 +50,7 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
   const [removed, setRemoved] = useState<{ relationId: string; draft: Draft } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const unsaved = Boolean(view?.active && (title !== view.title || Object.values(drafts).some((rows) => rows.some((row) => row.dirty))))
-  const changeTab = (next: Tab) => { setPicker(false); setTab(next); history.replaceState(null, '', `#/${next}`); window.scrollTo({ top: 0 }) }
+  const changeTab = (next: Tab) => { setPicker(false); setEditingPlan(null); setTab(next); history.replaceState(null, '', `#/${next}`); window.scrollTo({ top: 0 }) }
 
   const refresh = useCallback(async (preserve = true) => {
     const next = await repository.load()
@@ -56,6 +59,7 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
     setDrafts((current) => rowsFrom(next, preserve ? current : {}))
     if (!preserve) { setRemoved(null); setRestUntil(null) }
     setJournal(await repository.listJournal())
+    setPlans(await repository.listPlans())
   }, [repository])
 
   useEffect(() => {
@@ -65,7 +69,7 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
         const next = await repository.load(), savedDraft = await repository.loadDraft(), nextJournal = await repository.listJournal()
         if (!active) return
         const draft = savedDraft?.workoutId === next.workoutId ? savedDraft : null
-        setView(next); setTitle(draft?.titleDirty ? draft.title : next.title); setDrafts(rowsFrom(next, draft?.rows)); setRestUntil(draft?.restUntil ?? null); setJournal(nextJournal)
+        setView(next); setTitle(draft?.titleDirty ? draft.title : next.title); setDrafts(rowsFrom(next, draft?.rows)); setRestUntil(draft?.restUntil ?? null); setJournal(nextJournal); setPlans(await repository.listPlans())
       } catch (cause) { if (active) setError(message(cause)) }
       finally { if (active) setLoading(false) }
     })()
@@ -93,6 +97,15 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
   }
   async function start(name: string, exerciseNames: readonly string[] = []) {
     if (await apply({ kind: 'startWorkout', operationId: uuid(), workoutId: uuid(), title: name, exerciseNames: [...exerciseNames] }, false)) { setNewTitle(''); changeTab('workout') }
+  }
+  async function savePlan(plan: TrainingPlanView) {
+    try { setBusy(true); setError(null); await repository.savePlan(plan, uuid()); setPlans(await repository.listPlans()); setEditingPlan(null); onLocalWrite?.(); return true }
+    catch (cause) { setError(message(cause)); return false } finally { setBusy(false) }
+  }
+  async function deletePlan(plan: TrainingPlanView) {
+    if (!window.confirm(`Удалить тренировку «${plan.title}»? Уже записанные тренировки сохранятся.`)) return
+    try { setBusy(true); setError(null); await repository.deletePlan(plan.id, uuid()); setPlans(await repository.listPlans()); onLocalWrite?.() }
+    catch (cause) { setError(message(cause)) } finally { setBusy(false) }
   }
   function addDraft(relationId: string, exerciseId: string) {
     const last = previousExercise(journal.workouts, exerciseId)
@@ -152,12 +165,12 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
   return <><main className="app-shell app-shell--with-nav">
     {error && <div role="alert" className="load-error">{error} {!view && <Button onClick={() => void refresh(false)}>Повторить</Button>}</div>}
     {notice && <p role="status" className="backup-notice">{notice}</p>}
-    {loading ? <p role="status">Открываем ваш журнал…</p> : picker || tab === 'exercises' ? <ExerciseLibrary journal={journal} busy={busy} canAttach={Boolean(view?.active)} onChoose={chooseExercise} onArchive={archiveExercise} onClose={picker ? () => setPicker(false) : undefined} /> : tab === 'history' ? <CalendarHistory journal={journal} busy={busy} canStart={!view?.active} onRepeat={(workout) => void start(workout.title, workout.exercises.map((item) => item.name))} onEdit={(workoutId) => void (async () => { if (await apply({ kind: 'reopenWorkout', operationId: uuid(), workoutId }, false)) changeTab('workout') })()} /> : tab === 'progress' ? <ProgressScreen journal={journal} /> : <>
+    {loading ? <p role="status">Открываем ваш журнал…</p> : editingPlan ? <TrainingPlanEditor key={editingPlan === 'new' ? 'new' : editingPlan.id} initial={editingPlan === 'new' ? undefined : editingPlan} busy={busy} onSave={savePlan} onCancel={() => setEditingPlan(null)} /> : picker || tab === 'exercises' ? <ExerciseLibrary journal={journal} busy={busy} canAttach={Boolean(view?.active)} onChoose={chooseExercise} onArchive={archiveExercise} onClose={picker ? () => setPicker(false) : undefined} /> : tab === 'history' ? <CalendarHistory journal={journal} busy={busy} canStart={!view?.active} onRepeat={(workout) => void start(workout.title, workout.exercises.map((item) => item.name))} onEdit={(workoutId) => void (async () => { if (await apply({ kind: 'reopenWorkout', operationId: uuid(), workoutId }, false)) changeTab('workout') })()} /> : tab === 'progress' ? <ProgressScreen journal={journal} /> : <>
       <header className="page-header"><div className="header-kicker"><span className="live-dot" /> ВАШ ЛИЧНЫЙ ПРОГРЕСС</div><h1>Тренировка</h1><p className="date-line">{date}</p></header>
       {!view?.active ? <>
-        <section className="start-hero"><span className="hero-mark" aria-hidden="true">↗</span><p className="eyebrow">СЛЕДУЮЩИЙ ШАГ — ВАШ</p><h2>Сильнее с каждой тренировкой.</h2><p>Начните с чистого листа или повторите знакомый состав.</p><form onSubmit={(event) => { event.preventDefault(); void start(newTitle) }}><label htmlFor="new-workout-title">Название тренировки</label><input id="new-workout-title" className="search-input" maxLength={60} placeholder="Например, Спина и бицепс" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} required /><Button disabled={busy || !newTitle.trim()} className="add-button">＋ Начать тренировку</Button></form></section>
+        <section className="saved-plans"><div className="section-heading"><div><p className="screen-eyebrow">ВАШ ПЛАН</p><h2>Мои тренировки</h2></div><Button variant="quiet" onClick={() => setEditingPlan('new')}>＋ Создать</Button></div><p className="empty-note">Заранее добавьте нужные упражнения, а подходы запишите в зале.</p>{plans.map((plan) => <article className="saved-plan-card" key={plan.id}><div><strong>{plan.title}</strong><span>{plan.exerciseNames.length} упражнений · {plan.exerciseNames.join(' · ')}</span></div><div className="saved-plan-actions"><Button disabled={busy} onClick={() => void start(plan.title, plan.exerciseNames)}>Начать</Button><Button variant="quiet" onClick={() => setEditingPlan(plan)}>Изменить</Button><Button variant="quiet" aria-label={`Удалить ${plan.title}`} onClick={() => void deletePlan(plan)}>×</Button></div></article>)}</section>
+        <section className="start-hero"><p className="eyebrow">РАЗОВАЯ ТРЕНИРОВКА</p><h2>Начать с чистого листа.</h2><p>Состав добавите уже во время тренировки.</p><form onSubmit={(event) => { event.preventDefault(); void start(newTitle) }}><label htmlFor="new-workout-title">Название тренировки</label><input id="new-workout-title" className="search-input" maxLength={60} placeholder="Название тренировки" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} required /><Button disabled={busy || !newTitle.trim()} className="add-button">＋ Начать тренировку</Button></form></section>
         {journal.workouts.find((item) => item.completedAt) && <section className="recent-workout"><p className="eyebrow">ПОВТОРИТЬ ПОСЛЕДНЮЮ</p><h2>{journal.workouts.find((item) => item.completedAt)!.title}</h2><p>Состав сохранён. Подходы запишете заново.</p><Button variant="quiet" disabled={busy} onClick={() => { const last = journal.workouts.find((item) => item.completedAt)!; void start(last.title, last.exercises.map((exercise) => exercise.name)) }}>Начать с этим составом →</Button></section>}
-        <h2 className="screen-subtitle">Быстрый старт</h2><p className="empty-note">Примеры состава. Выберите подходящие упражнения и нагрузку самостоятельно.</p><div className="routine-grid">{starterRoutines.map((routine, index) => <button key={routine.name} disabled={busy} className="routine-card" onClick={() => { setNewTitle(routine.name); if (window.confirm(`Начать «${routine.name}»? Упражнения можно изменить во время тренировки.`)) void start(routine.name, routine.names) }}><span>0{index + 1}</span><strong>{routine.name}</strong><small>{routine.subtitle}</small><b aria-hidden="true">↗</b></button>)}</div>
       </> : <>
         <section className="workout-title-card"><label htmlFor="workout-title">СЕГОДНЯШНЯЯ ЦЕЛЬ</label><div className="title-edit"><input id="workout-title" maxLength={60} aria-label="Название тренировки" disabled={busy} value={title} onChange={(event) => setTitle(event.target.value)} />{title !== view.title && <Button variant="quiet" disabled={busy || !title.trim()} onClick={() => void apply({ kind: 'rename', operationId: uuid(), title })}>Готово</Button>}</div><div className="workout-summary"><span>{view.exercises.length} упр.</span><span>{savedCount} подх.</span><span>{new Intl.NumberFormat('ru-RU').format(volume)} кг</span></div></section>
         <RestTimer until={restUntil} onChange={setRestUntil} />

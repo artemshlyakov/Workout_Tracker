@@ -80,7 +80,7 @@ describe('initial account sync', () => {
       workout_exercises: [{ ...base(relationId), workout_id: workoutId, exercise_id: exerciseId, position: 0 }],
       exercise_sets: [{ ...base(setId), workout_exercise_id: relationId, position: 0, weight_kg: 82.5, reps: 8 }],
     }
-    client = { ...client, from: vi.fn((name: string) => ({ select: () => ({ eq: () => request({ data: rows[name], error: null }) }) })) } as unknown as SupabaseClient
+    client = { ...client, from: vi.fn((name: string) => ({ select: () => ({ eq: () => request({ data: rows[name] ?? [], error: null }) }) })) } as unknown as SupabaseClient
     await new CloudSync(repository, client).prepare()
     expect((await repository.load()).exercises[0]?.sets).toEqual([{ id: setId, weight: '82,5', reps: '8', position: 0 }])
     expect((await db.exerciseSets.get(setId))?.serverRevision).toBe(4)
@@ -94,6 +94,19 @@ describe('initial account sync', () => {
     expect(rpc.mock.calls.map(([, args]) => args.p_entity_type)).toEqual(['workout', 'exercise', 'workout_exercise'])
     expect(await db.outbox.count()).toBe(0)
     expect((await db.workouts.where('workspaceId').equals(owner).first())?.serverRevision).toBe(1)
+  })
+
+  it('uploads saved workouts through their own RPC and hydrates them in a clean profile', async () => {
+    const planId = crypto.randomUUID()
+    await repository.savePlan({ id: planId, title: 'Моя тренировка', exerciseNames: ['Жим', 'Тяга'] }, crypto.randomUUID())
+    expect(await new CloudSync(repository, client).push()).toEqual({ acknowledged: 1, pending: 0 })
+    expect(rpc.mock.calls[0]).toMatchObject(['apply_training_plan_operation', { p_entity_id: planId, p_action: 'upsert', p_payload: { title: 'Моя тренировка', exercise_names: ['Жим', 'Тяга'] } }])
+    const clean = new DexieWorkoutRepository(new WorkoutDatabase(`clean-${crypto.randomUUID()}`), { ownerUserId: owner })
+    const timestamp = new Date().toISOString()
+    try {
+      await new CloudSync(clean, cloudRows({ training_plans: [{ id: planId, user_id: owner, title: 'Моя тренировка', exercise_names: ['Жим', 'Тяга'], revision: 1, created_at: timestamp, updated_at: timestamp, deleted_at: null }] })).prepare()
+      expect(await clean.listPlans()).toEqual([{ id: planId, title: 'Моя тренировка', exerciseNames: ['Жим', 'Тяга'] }])
+    } finally { clean.db.close(); await clean.db.delete() }
   })
 
   it('retries an unknown acknowledgment with the same operation UUID and CAS revision', async () => {

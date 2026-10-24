@@ -26,6 +26,8 @@ vi.mock('../../data/local/DexieWorkoutRepository', () => ({ DexieWorkoutReposito
   constructor(_db: unknown, options: { ownerUserId: string }) { this.workspaceId = options.ownerUserId; this.ownerUserId = options.ownerUserId }
   async load() { return { title: this.workspaceId, sets: [] } }
   async listJournal() { return { workouts: [], exercises: [] } }
+  async loadBodyProfile() { return { heightCm: null, bodyWeightKg: null } }
+  async saveBodyProfile() { return undefined }
   async exportAccountData() { return '{}' }
 } }))
 vi.mock('../../data/cloud/sync', () => ({ CloudSync: class {
