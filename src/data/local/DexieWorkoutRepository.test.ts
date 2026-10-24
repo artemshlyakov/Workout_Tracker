@@ -173,3 +173,35 @@ describe('personal diary reliability', () => {
     expect(await db.outbox.toArray()).toEqual(before)
   })
 })
+
+describe('personal exercise removal without losing history', () => {
+  it('blocks an exercise in the active workout and preserves historical sets after archiving', async () => {
+    await start('Архив'); const relation = await add('Старое упражнение'); await set(relation, '45', '12')
+    const exerciseId = (await repository.listJournal()).exercises[0].id
+    await expect(repository.apply({ kind: 'archiveExercise', operationId: id(), exerciseId })).rejects.toThrow('текущей тренировки')
+    await repository.apply({ kind: 'finishWorkout', operationId: id() })
+    await repository.apply({ kind: 'archiveExercise', operationId: id(), exerciseId })
+    expect((await repository.listJournal()).exercises).toEqual([])
+    expect((await repository.listJournal()).workouts[0].exercises[0]).toMatchObject({ name: 'Старое упражнение', sets: [{ weight: 45, reps: 12 }] })
+    await expect(repository.apply({ kind: 'reopenWorkout', operationId: id(), workoutId: (await repository.listJournal()).workouts[0].id })).rejects.toThrow('архивное упражнение')
+    expect((await db.outbox.toArray()).at(-1)).toMatchObject({ entityType: 'exercise', action: 'delete', entityId: exerciseId })
+    db.close()
+    const reopened = new DexieWorkoutRepository(new WorkoutDatabase(db.name), { ownerUserId: owner })
+    expect((await reopened.listJournal()).workouts[0].exercises[0].sets).toHaveLength(1)
+    const backup = await reopened.exportAccountData()
+    expect(await reopened.importAccountData(backup)).toBe(1)
+    expect((await reopened.listJournal()).workouts.map((item) => item.exercises[0].name)).toEqual(['Старое упражнение', 'Старое упражнение'])
+    reopened.db.close()
+  })
+
+  it('removes an unused personal exercise atomically with its outbox operation', async () => {
+    await repository.load()
+    const exerciseId = id()
+    await repository.apply({ kind: 'createExercise', operationId: id(), exerciseId, name: 'Моё движение' })
+    vi.spyOn(db.outbox, 'add').mockRejectedValueOnce(new Error('outbox failed'))
+    await expect(repository.apply({ kind: 'archiveExercise', operationId: id(), exerciseId })).rejects.toThrow('outbox failed')
+    expect((await db.exercises.get(exerciseId))?.deletedAt).toBeNull()
+    await repository.apply({ kind: 'archiveExercise', operationId: id(), exerciseId })
+    expect((await repository.listJournal()).exercises).toEqual([])
+  })
+})

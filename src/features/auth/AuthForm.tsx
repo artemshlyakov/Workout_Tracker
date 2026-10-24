@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { authErrorMessage, signIn, signUp } from '../../data/auth/auth'
 import { Button } from '../../shared/Button'
+import { ThemeToggle, type Theme } from '../../shared/theme'
 
-export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?: string | null }) {
+export function AuthForm({ onSuccess, notice, theme, onThemeToggle }: { onSuccess: () => void; notice?: string | null; theme: Theme; onThemeToggle: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -38,6 +39,7 @@ export function AuthForm({ onSuccess, notice }: { onSuccess: () => void; notice?
   }
 
   return <main className="app-shell auth-shell">
+    <div className="auth-brand"><img src={`${import.meta.env.BASE_URL}icon-180.png`} width="60" height="60" alt="Workout Tracker" /><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div>
     <div className="header-kicker"><span className="live-dot" aria-hidden="true" /> WORKOUT TRACKER</div>
     <h1>{registering ? 'Регистрация' : 'Ваши тренировки'}</h1>
     <p className="date-line">Личный журнал силовых тренировок</p>

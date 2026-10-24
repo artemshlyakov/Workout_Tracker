@@ -38,6 +38,7 @@ export type WorkoutCommand =
   | { kind: 'removeExercise'; operationId: string; relationId: string }
   | { kind: 'moveExercise'; operationId: string; relationId: string; direction: -1 | 1 }
   | { kind: 'createExercise'; operationId: string; exerciseId: string; name: string }
+  | { kind: 'archiveExercise'; operationId: string; exerciseId: string }
   | { kind: 'addExercise'; operationId: string; relationId: string; exerciseId: string }
   | { kind: 'saveSet'; operationId: string; id: string; relationId: string; weight: string; reps: string; position: number }
   | { kind: 'deleteSet'; operationId: string; id: string; relationId: string }

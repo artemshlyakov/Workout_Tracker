@@ -19,7 +19,6 @@ export function parseAccountBackup(json: string, owner: string): AccountBackup {
     value.workoutExercises.some((row) => !workoutIds.has(row.workoutId) || !exerciseIds.has(row.exerciseId) || !Number.isSafeInteger(row.position) || row.position < 0) ||
     value.exerciseSets.some((row) => !relationIds.has(row.workoutExerciseId) || !Number.isSafeInteger(row.position) || row.position < 0 || !Number.isSafeInteger(row.weightCentiKg) || row.weightCentiKg < 0 || row.weightCentiKg > 200000 || !Number.isSafeInteger(row.reps) || row.reps < 1 || row.reps > 1000)) throw new Error('Некорректные значения в копии')
   const liveWorkoutIds = new Set(value.workouts.filter((row) => !row.deletedAt).map((row) => row.id))
-  const liveExerciseIds = new Set(value.exercises.filter((row) => !row.deletedAt).map((row) => row.id))
-  if (value.workoutExercises.some((row) => !row.deletedAt && liveWorkoutIds.has(row.workoutId) && !liveExerciseIds.has(row.exerciseId))) throw new Error('Упражнение из копии удалено: восстановление остановлено')
+  if (value.workoutExercises.some((row) => !row.deletedAt && liveWorkoutIds.has(row.workoutId) && !exerciseIds.has(row.exerciseId))) throw new Error('Упражнение из копии не найдено: восстановление остановлено')
   return value
 }

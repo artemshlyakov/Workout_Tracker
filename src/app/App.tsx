@@ -133,6 +133,10 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
     } else setNotice('Упражнение добавлено в личный каталог')
     return true
   }
+  async function archiveExercise(exerciseId: string, name: string) {
+    if (!window.confirm(`Убрать «${name}» из личного каталога? Записи прошлых тренировок сохранятся.`)) return
+    if (await apply({ kind: 'archiveExercise', operationId: uuid(), exerciseId })) setNotice('Упражнение убрано из личного каталога. История сохранена.')
+  }
   async function exportDev() {
     try { const url = URL.createObjectURL(new Blob([await repository.exportData()], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = 'workout-tracker-dev-backup.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
     catch (cause) { setError(message(cause)) }
@@ -147,7 +151,7 @@ export function App({ repository, authenticated = false, onLocalWrite, onDraftSt
   return <><main className="app-shell app-shell--with-nav">
     {error && <div role="alert" className="load-error">{error} {!view && <Button onClick={() => void refresh(false)}>Повторить</Button>}</div>}
     {notice && <p role="status" className="backup-notice">{notice}</p>}
-    {loading ? <p role="status">Открываем ваш журнал…</p> : picker || tab === 'exercises' ? <ExerciseLibrary journal={journal} busy={busy} onChoose={chooseExercise} onClose={picker ? () => setPicker(false) : undefined} /> : tab === 'history' ? <CalendarHistory journal={journal} busy={busy} canStart={!view?.active} onRepeat={(workout) => void start(workout.title, workout.exercises.map((item) => item.name))} onEdit={(workoutId) => void (async () => { if (await apply({ kind: 'reopenWorkout', operationId: uuid(), workoutId }, false)) changeTab('workout') })()} /> : tab === 'progress' ? <ProgressScreen journal={journal} /> : <>
+    {loading ? <p role="status">Открываем ваш журнал…</p> : picker || tab === 'exercises' ? <ExerciseLibrary journal={journal} busy={busy} onChoose={chooseExercise} onArchive={archiveExercise} onClose={picker ? () => setPicker(false) : undefined} /> : tab === 'history' ? <CalendarHistory journal={journal} busy={busy} canStart={!view?.active} onRepeat={(workout) => void start(workout.title, workout.exercises.map((item) => item.name))} onEdit={(workoutId) => void (async () => { if (await apply({ kind: 'reopenWorkout', operationId: uuid(), workoutId }, false)) changeTab('workout') })()} /> : tab === 'progress' ? <ProgressScreen journal={journal} /> : <>
       <header className="page-header"><div className="header-kicker"><span className="live-dot" /> ВАШ ЛИЧНЫЙ ПРОГРЕСС</div><h1>Тренировка</h1><p className="date-line">{date}</p></header>
       {!view?.active ? <>
         <section className="start-hero"><span className="hero-mark" aria-hidden="true">↗</span><p className="eyebrow">СЛЕДУЮЩИЙ ШАГ — ВАШ</p><h2>Сильнее с каждой тренировкой.</h2><p>Начните с чистого листа или повторите знакомый состав.</p><form onSubmit={(event) => { event.preventDefault(); void start(newTitle) }}><label htmlFor="new-workout-title">Название тренировки</label><input id="new-workout-title" className="search-input" maxLength={60} placeholder="Например, Спина и бицепс" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} required /><Button disabled={busy || !newTitle.trim()} className="add-button">＋ Начать тренировку</Button></form></section>

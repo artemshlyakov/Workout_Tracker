@@ -25,6 +25,7 @@ vi.mock('../../data/local/DexieWorkoutRepository', () => ({ DexieWorkoutReposito
   db = { workspaces: { get: async () => ({ id: this.workspaceId }) }, outbox: { where: () => ({ equals: () => ({ count: async () => 0 }) }) } }
   constructor(_db: unknown, options: { ownerUserId: string }) { this.workspaceId = options.ownerUserId; this.ownerUserId = options.ownerUserId }
   async load() { return { title: this.workspaceId, sets: [] } }
+  async listJournal() { return { workouts: [], exercises: [] } }
   async exportAccountData() { return '{}' }
 } }))
 vi.mock('../../data/cloud/sync', () => ({ CloudSync: class {
@@ -66,6 +67,9 @@ it('scopes errors, draft state, status, and workspace to each account across swi
   expect(container.textContent).not.toContain('A network error')
   expect(container.textContent).toContain('Облачное состояние ещё не проверено')
   expect(state.stops).toContain('A')
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Открыть профиль"]')!.click() })
+  expect(container.querySelector('.profile-dialog')?.textContent).toContain('B@test.invalid')
+  expect(container.querySelector('.profile-dialog')?.textContent).toContain('Данные и резервная копия')
   await act(async () => { [...container.querySelectorAll('button')].find((button) => button.textContent === 'Выйти из аккаунта')!.click() })
   await vi.waitFor(() => expect(container.querySelector('[data-testid=workout]')).toBeNull())
   expect(window.confirm).not.toHaveBeenCalled()
@@ -74,6 +78,17 @@ it('scopes errors, draft state, status, and workspace to each account across swi
   await vi.waitFor(() => expect(container.querySelector('[data-testid=workout]')?.textContent).toContain('A'))
   expect(container.textContent).not.toContain('A network error')
   expect(state.stops).toContain('B')
+})
+
+it('switches and restores the chosen theme without changing the account', async () => {
+  localStorage.removeItem('workout-tracker-theme')
+  await act(async () => root.render(<AuthGate />))
+  await vi.waitFor(() => expect(container.querySelector('[data-testid=workout]')).not.toBeNull())
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Включить светлую тему"]')!.click() })
+  expect(document.documentElement.dataset.theme).toBe('light')
+  expect(localStorage.getItem('workout-tracker-theme')).toBe('light')
+  expect(container.querySelector('[data-testid=workout]')?.textContent).toContain('A')
+  localStorage.removeItem('workout-tracker-theme')
 })
 
 it('ignores a late A restore after logout', async () => {

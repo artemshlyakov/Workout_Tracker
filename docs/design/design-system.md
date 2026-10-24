@@ -6,7 +6,7 @@
 
 Fast, focused, strong, precise. Near-black input surfaces, blue-graphite elevated surfaces, lime CTA for immediate training actions, electric blue for statistics/information. **One coherent theme** — never independently switch the screen's whole palette between A and C.
 
-## Color tokens (light mode is out of scope initially)
+## Цветовые темы
 
 | Token | Hex | Meaning |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ Fast, focused, strong, precise. Near-black input surfaces, blue-graphite elevate
 | `state.warning` | `#FFC76D` | local-only pending |
 | `state.danger` | `#FF7D86` | errors / destructive |
 
-Use `#091016` on filled lime/blue buttons for readable labels. Error/success communication must never depend on color alone.
+Светлая тема использует холст `#F3F6F4`, белые карточки, тёмный текст `#17251E` и тот же лаймовый CTA; для мелкого текста лаймовый заменяется контрастным зелёным `#3D6919`. Выбор темы хранится на устройстве и доступен с экрана входа и в шапке журнала. Use `#091016` on filled lime/blue buttons for readable labels. Error/success communication must never depend on color alone.
 
 ## Spacing and layout
 
@@ -54,7 +54,7 @@ Native system fonts (`system-ui`, `-apple-system`, `Segoe UI`, `Roboto`, sans-se
 4. Set status distinct: completed / planned. In the current workout screen, a row is saved only after explicit validation and a successful local transaction; cloud status is reported separately by AuthGate.
 5. On-screen keyboard must not hide the currently edited field or Save/Add control; allow natural scroll.
 6. Support focus-visible, keyboard operation, labels, `aria-live` save states and `prefers-reduced-motion`.
-7. No unnecessary animated background, gradient decoration or heavy charts in active workout.
+7. No unnecessary animated background, gradient decoration or heavy charts in active workout. Короткие переходы цвета и отклик на нажатие выключаются через `prefers-reduced-motion`.
 
 ## Save states
 
@@ -72,3 +72,7 @@ Bottom tabs: `Тренировка`, `История`, `Упражнения`, `
 ## Reference screenshots
 
 `docs/design/hybrid-mobile-concept.png` is a concept sheet, NOT exact product content; values/statistics shown there are illustrative. See `screens.md` for accepted behavior and priority.
+
+## Plan 007
+
+Иконка сочетает штангу и растущую линию, без букв и мелких деталей. Профиль открывается круглой кнопкой справа сверху; резервное копирование находится в раскрываемом разделе. Pinch zoom разрешён для доступности, поля >=16px не запускают автоприближение при фокусе iOS. Светлая и тёмная темы проверяются на 360/390 px в локальном Chromium.
