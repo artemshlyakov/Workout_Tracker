@@ -3,7 +3,8 @@ import type { CloudSync, SyncConflict } from '../../data/cloud/sync'
 import { Button } from '../../shared/Button'
 function describe(record: SyncConflict['local']): string {
   if (record.deletedAt) return 'Запись удалена'
-  if ('title' in record) return `${record.title} · ${record.completedAt ? 'Завершена' : 'В процессе'}`
+  if ('exerciseNames' in record) return `${record.title} · ${record.exerciseNames.length} упражнений`
+  if ('completedAt' in record) return `${record.title} · ${record.completedAt ? 'Завершена' : 'В процессе'}`
   if ('name' in record) return record.name
   if ('weightCentiKg' in record) return `${record.weightCentiKg / 100} кг × ${record.reps} повт.`
   return `Упражнение в позиции ${record.position + 1}`

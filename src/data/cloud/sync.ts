@@ -1,11 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DexieWorkoutRepository } from '../local/DexieWorkoutRepository'
-import type { ExerciseRecord, ExerciseSetRecord, OutboxOperation, WorkoutExerciseRecord, WorkoutRecord } from '../local/schema'
+import type { ExerciseRecord, ExerciseSetRecord, OutboxOperation, WorkoutExerciseRecord, WorkoutRecord, TrainingPlanRecord } from '../local/schema'
 import { supabase } from './client'
 
-const tableFor = { workout: 'workouts', exercise: 'exercises', workoutExercise: 'workoutExercises', exerciseSet: 'exerciseSets' } as const
-const entityFor = { workout: 'workout', exercise: 'exercise', workoutExercise: 'workout_exercise', exerciseSet: 'exercise_set' } as const
-type LocalEntity = WorkoutRecord | ExerciseRecord | WorkoutExerciseRecord | ExerciseSetRecord
+const tableFor = { workout: 'workouts', exercise: 'exercises', workoutExercise: 'workoutExercises', exerciseSet: 'exerciseSets', trainingPlan: 'trainingPlans' } as const
+const entityFor = { workout: 'workout', exercise: 'exercise', workoutExercise: 'workout_exercise', exerciseSet: 'exercise_set', trainingPlan: 'training_plan' } as const
+type LocalEntity = WorkoutRecord | ExerciseRecord | WorkoutExerciseRecord | ExerciseSetRecord | TrainingPlanRecord
 
 export interface PrepareResult { cloudChecked: boolean }
 export interface PushResult { acknowledged: number; pending: number }
@@ -15,6 +15,7 @@ export function operationPayload(operation: OutboxOperation): Record<string, unk
   if (operation.action === 'delete') return {}
   const row = operation.snapshot
   switch (operation.entityType) {
+    case 'trainingPlan': return { title: (row as TrainingPlanRecord).title, exercise_names: (row as TrainingPlanRecord).exerciseNames }
     case 'workout': return { title: (row as WorkoutRecord).title, started_at: (row as WorkoutRecord).startedAt, completed_at: (row as WorkoutRecord).completedAt }
     case 'exercise': return { name: (row as ExerciseRecord).name }
     case 'workoutExercise': {
@@ -75,8 +76,8 @@ export class CloudSync {
         if (data.length < pageSize) return rows
       }
     }
-    const [workouts, exercises, relations, sets] = await Promise.all([
-      read('workouts'), read('exercises'), read('workout_exercises'), read('exercise_sets'),
+    const [workouts, exercises, relations, sets, plans] = await Promise.all([
+      read('workouts'), read('exercises'), read('workout_exercises'), read('exercise_sets'), read('training_plans'),
     ])
     const workoutIds = new Set(workouts.map((row) => row.id)), exerciseIds = new Set(exercises.map((row) => row.id))
     const relationIds = new Set(relations.map((row) => row.id))
@@ -89,7 +90,7 @@ export class CloudSync {
       createdAt: String(row.created_at), updatedAt: String(row.updated_at),
       deletedAt: row.deleted_at ? String(row.deleted_at) : null,
     })
-    const changed = await db.transaction('rw', [db.workspaces, db.workouts, db.exercises, db.workoutExercises, db.exerciseSets, db.syncState, db.outbox], async () => {
+    const changed = await db.transaction('rw', [db.workspaces, db.workouts, db.exercises, db.workoutExercises, db.exerciseSets, db.trainingPlans, db.syncState, db.outbox], async () => {
       if (this.paused) throw new Error('Синхронизация остановлена')
       // A write may have arrived during the network requests.
       if (await this.pendingCount() || (await this.repository.loadDraft())?.dirty) return false
@@ -108,6 +109,7 @@ export class CloudSync {
       await merge('exercises', exercises.map((r) => ({ ...meta(r), name: String(r.name) })))
       await merge('workoutExercises', relations.map((r) => ({ ...meta(r), workoutId: String(r.workout_id), exerciseId: String(r.exercise_id), position: Number(r.position) })))
       await merge('exerciseSets', sets.map((r) => ({ ...meta(r), workoutExerciseId: String(r.workout_exercise_id), position: Number(r.position), weightCentiKg: Math.round(Number(r.weight_kg) * 100), reps: Number(r.reps) })))
+      await merge('trainingPlans', plans.map((r) => ({ ...meta(r), title: String(r.title), exerciseNames: r.exercise_names as string[] })))
       await db.syncState.put({ workspaceId: this.userId, ownerUserId: this.userId, cursor: null, lastAckAt: time })
       return true
     })
@@ -153,14 +155,12 @@ export class CloudSync {
         await db.outbox.put(operation)
       }
       if (this.paused) break
-      const { data, error: rpcError } = await this.client.rpc('apply_workout_operation', {
-        p_operation_id: operation.operationId,
-        p_entity_type: entityFor[operation.entityType],
-        p_entity_id: operation.entityId,
-        p_action: operation.action,
-        p_base_revision: operation.baseServerRevision,
-        p_payload: operationPayload(operation),
-      }).setHeader('Authorization', `Bearer ${token}`).abortSignal(this.abortController.signal)
+      const params = { p_operation_id: operation.operationId, p_entity_id: operation.entityId, p_action: operation.action,
+        p_base_revision: operation.baseServerRevision, p_payload: operationPayload(operation) }
+      const request = operation.entityType === 'trainingPlan'
+        ? this.client.rpc('apply_training_plan_operation', params)
+        : this.client.rpc('apply_workout_operation', { ...params, p_entity_type: entityFor[operation.entityType] })
+      const { data, error: rpcError } = await request.setHeader('Authorization', `Bearer ${token}`).abortSignal(this.abortController.signal)
       if (this.paused) throw new Error('Синхронизация остановлена')
       if (rpcError) throw rpcError
       if (!data || data.operation_id !== operation.operationId || data.entity_id !== operation.entityId) throw new Error('Неожиданное подтверждение сервера')
@@ -192,7 +192,7 @@ export class CloudSync {
 
   private async conflictRemote(operation: OutboxOperation): Promise<LocalEntity> {
     const token = await this.verifiedToken()
-    const names = { workout: 'workouts', exercise: 'exercises', workoutExercise: 'workout_exercises', exerciseSet: 'exercise_sets' }
+    const names = { workout: 'workouts', exercise: 'exercises', workoutExercise: 'workout_exercises', exerciseSet: 'exercise_sets', trainingPlan: 'training_plans' }
     const { data: row, error } = await this.client.from(names[operation.entityType]).select('*').eq('user_id', this.userId).eq('id', operation.entityId)
       .setHeader('Authorization', `Bearer ${token}`).abortSignal(this.abortController.signal).maybeSingle()
     if (this.paused) throw new Error('Синхронизация остановлена')
@@ -200,6 +200,7 @@ export class CloudSync {
     if (!row || row.user_id !== this.userId || row.id !== operation.entityId || !Number.isSafeInteger(Number(row.revision)) || Number(row.revision) < 1) throw new Error('Облачная версия недоступна. Локальная копия сохранена')
     const base = { id: row.id, workspaceId: this.userId, ownerUserId: this.userId, serverRevision: Number(row.revision), localRevision: 1, createdAt: row.created_at, updatedAt: row.updated_at, deletedAt: row.deleted_at }
     switch (operation.entityType) {
+      case 'trainingPlan': return { ...base, title: row.title, exerciseNames: row.exercise_names }
       case 'workout': return { ...base, title: row.title, startedAt: row.started_at, completedAt: row.completed_at }
       case 'exercise': return { ...base, name: row.name }
       case 'workoutExercise': return { ...base, workoutId: row.workout_id, exerciseId: row.exercise_id, position: row.position }
@@ -214,7 +215,7 @@ export class CloudSync {
     const remote = await this.conflictRemote(operation)
     if (remote.serverRevision !== conflict.remote.serverRevision) throw new Error('Облачная версия изменилась. Обновите сравнение')
     if (choice === 'local' && remote.deletedAt) throw new Error('Удалённую запись нельзя воскресить. Сначала экспортируйте локальную копию')
-    await db.transaction('rw', [db.workspaces, db.workouts, db.exercises, db.workoutExercises, db.exerciseSets, db.outbox], async () => {
+    await db.transaction('rw', [db.workspaces, db.workouts, db.exercises, db.workoutExercises, db.exerciseSets, db.trainingPlans, db.outbox], async () => {
       if (this.paused) throw new Error('Синхронизация остановлена')
       const queued = await db.outbox.get(operation.sequence!)
       if (!queued || queued.operationId !== operation.operationId || queued.status !== 'conflict') throw new Error('Конфликт уже изменился. Обновите список')

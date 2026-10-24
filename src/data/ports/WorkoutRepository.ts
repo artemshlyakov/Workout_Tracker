@@ -44,7 +44,15 @@ export type WorkoutCommand =
   | { kind: 'deleteSet'; operationId: string; id: string; relationId: string }
   | { kind: 'restoreSet'; operationId: string; id: string; relationId: string; weight: string; reps: string; position: number }
 
+export interface TrainingPlanView { id: string; title: string; exerciseNames: string[] }
+export interface BodyProfile { heightCm: number | null; bodyWeightKg: number | null }
+
 export interface WorkoutRepository {
+  listPlans(): Promise<TrainingPlanView[]>
+  savePlan(input: TrainingPlanView, operationId: string): Promise<void>
+  deletePlan(id: string, operationId: string): Promise<void>
+  loadBodyProfile(): Promise<BodyProfile>
+  saveBodyProfile(profile: BodyProfile): Promise<void>
   load(): Promise<WorkoutView>
   listJournal(): Promise<JournalView>
   apply(command: WorkoutCommand): Promise<void>

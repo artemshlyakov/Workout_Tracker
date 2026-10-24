@@ -1,6 +1,6 @@
 # Architecture — Workout Tracker v0.5 (auth-required / local-first / closed personal pilot)
 
-**Status:** реализован личный дневник Plan 006 поверх main `cc06cfa` после PR #7 и #8; полный браузерный gate Plan 004 остаётся открытым. Договорённости: offline-before-gym-launch (ADR 0002), private accounts required (ADR 0006), unverified-email personal pilot (ADR 0007). До Plan 004 не считать готовым.
+**Status:** личный дневник дополнен сохранёнными тренировками Plan 008; полный браузерный gate Plan 004 остаётся открытым. Договорённости: offline-before-gym-launch (ADR 0002), private accounts required (ADR 0006), unverified-email personal pilot (ADR 0007). До Plan 004 не считать готовым.
 
 ## Компоненты
 ```mermaid
@@ -62,3 +62,7 @@ flowchart TD
 ## Развитие личного дневника (Plan 006)
 
 Черновики и восстановление, повторный pull, конфликты и PWA обновления: ADR `docs/architecture/decisions/0008-personal-diary-drafts-and-recovery.md`. Существующие таблицы и RPC сохранены; публичный каталог отделён от пользовательских записей. Результаты и ограничения см. в актуальной секции `docs/PROGRESS.md`.
+
+## Сохранённые тренировки (Plan 008)
+
+Сохранённая тренировка — отдельный шаблон `training_plans` с названием и упорядоченными названиями упражнений; подходов и даты у него нет. Запуск через существующий `WorkoutRepository` создаёт обычную датированную запись `workouts` и связи `workout_exercises` в одной локальной транзакции с outbox. Изменение или удаление шаблона не меняет историю. Локальная таблица Dexie v2 дополняет v1 без пересоздания данных; облачная миграция добавляет owner-scoped таблицу, read RLS, CAS/idempotent RPC и журнал операций. Прямые записи в таблицу для `authenticated` запрещены. Рост и вес тела хранятся только в owner-scoped локальном workspace и входят в личную резервную копию; синхронизация этих параметров между устройствами пока не реализована.

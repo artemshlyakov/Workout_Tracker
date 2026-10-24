@@ -14,7 +14,8 @@ import { ProfileDialog } from './features/auth/AuthGate'
 function Preview() {
   const { theme, toggle } = useTheme()
   const [profile, setProfile] = useState(false)
-  return <><header className="account-topbar"><img className="account-topbar__logo" src="/Workout_Tracker/icon-180.png" width="34" height="34" alt="Workout Tracker" /><span className="account-topbar__name">Workout Tracker</span><ThemeToggle theme={theme} onToggle={toggle} /><button className="profile-trigger" aria-label="Открыть профиль" onClick={() => setProfile(true)}>Я</button></header>{profile && <ProfileDialog email="owner@example.test" status="Синхронизировано" stats={{workouts: 2, sets: 6}} importing={false} onClose={() => setProfile(false)} onSignOut={() => {}} onExport={() => {}} onImport={() => {}} />}<App repository={repository} authenticated /></>
+  const [bodyProfile, setBodyProfile] = useState<{heightCm: number | null; bodyWeightKg: number | null} | null>(null)
+  return <><header className="account-topbar"><img className="account-topbar__logo" src="/Workout_Tracker/icon-180.png" width="34" height="34" alt="Workout Tracker" /><span className="account-topbar__name">Workout Tracker</span><ThemeToggle theme={theme} onToggle={toggle} /><button className="profile-trigger" aria-label="Открыть профиль" onClick={() => {setProfile(true);void repository.loadBodyProfile().then(setBodyProfile)}}>Я</button></header>{profile && <ProfileDialog email="owner@example.test" status="Синхронизировано" stats={{workouts: 2, sets: 6}} bodyProfile={bodyProfile} onSaveBody={async(value) => {await repository.saveBodyProfile(value);setBodyProfile(value)}} importing={false} onClose={() => setProfile(false)} onSignOut={() => {}} onExport={() => {}} onImport={() => {}} />}<App repository={repository} authenticated /></>
 }
 ReactDOM.createRoot(document.getElementById('root')!).render(<Preview />)"""
 )
@@ -38,6 +39,10 @@ with sync_playwright() as p:
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
   page.get_by_role('button',name='Открыть профиль').click()
   expect(page.locator('.profile-dialog')).to_be_visible()
+  page.get_by_label('Рост, см').fill('180')
+  page.get_by_label('Вес, кг').fill('79.5')
+  page.get_by_role('button',name='Сохранить параметры').click()
+  expect(page.get_by_text('Параметры сохранены на устройстве')).to_be_visible()
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
   page.screenshot(path=f'/tmp/profile-light-{width}.png')
   page.get_by_role('button',name='Закрыть профиль').click()
@@ -46,18 +51,21 @@ with sync_playwright() as p:
   page.get_by_label('Включить тёмную тему').click()
   assert page.evaluate('document.documentElement.dataset.theme')=='dark'
 
-  page.locator('#new-workout-title').fill('Силовая — проверка')
-  page.get_by_role('button',name='Начать тренировку').click()
-  for name in ('Жим штанги лёжа','Тяга гантели одной рукой','Моё упражнение'):
-   page.get_by_role('button',name='Добавить упражнение').click()
-   if name=='Моё упражнение':
-    page.locator('summary').filter(has_text='Создать своё').click()
-    page.locator('#custom-name').fill(name); page.get_by_role('button',name='Создать упражнение',exact=True).click()
-   else:
-    page.get_by_label('Поиск упражнений').fill(name)
-    page.locator('.library-item').first.click()
-    page.get_by_role('button',name='Добавить в тренировку').click()
-   expect(page.locator('.library-screen')).to_have_count(0)
+  page.locator('.saved-plans').get_by_role('button',name=re.compile('Создать')).click()
+  page.locator('#plan-title').fill('Черновик программы')
+  for name in ('Жим штанги лёжа','Тяга гантели одной рукой'):
+   page.locator('#plan-search').fill(name)
+   page.locator('.plan-results button').filter(has_text=name).first.click()
+  page.get_by_label('Своё упражнение для программы').fill('Моё упражнение')
+  page.get_by_role('button',name='Добавить',exact=True).click()
+  page.get_by_role('button',name='Сохранить тренировку').click()
+  expect(page.locator('.saved-plan-card')).to_have_count(1)
+  page.reload();expect(page.locator('.saved-plan-card')).to_have_count(1)
+  page.locator('.saved-plan-card').get_by_role('button',name='Изменить').click()
+  page.locator('#plan-title').fill('Силовая — проверка')
+  page.get_by_role('button',name='Сохранить тренировку').click()
+  page.screenshot(path=f'/tmp/saved-plans-{width}.png',full_page=True)
+  page.locator('.saved-plan-card').get_by_role('button',name='Начать').click()
   cards=page.locator('.multi-exercise-card'); expect(cards).to_have_count(3)
   for i in range(3):
    for j in range(2):
@@ -88,12 +96,17 @@ with sync_playwright() as p:
   page.screenshot(path=f'/tmp/release-workout-{width}.png',full_page=True)
   page.get_by_role('button',name='Завершить тренировку').click()
   expect(page.locator('.calendar-card')).to_be_visible()
+  page.get_by_role('button',name=re.compile('тренировок: 1')).click()
+  expect(page.locator('.history-item--day')).to_have_count(1)
+  assert 'Силовая — проверка' in page.locator('.history-item--day').inner_text()
+  assert 'объёма' not in page.locator('.history-item--day').inner_text()
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'overflow calendar {width}'
   page.screenshot(path=f'/tmp/release-history-{width}.png',full_page=True)
   page.reload();page.locator('.history-item').first.click()
   expect(page.locator('.history-sets li')).to_have_count(6)
   backup=page.evaluate('window.repository.exportAccountData()')
   assert len(json.loads(backup)['exerciseSets'])==7 # six live and a tombstone from undo
+  assert len(json.loads(backup)['trainingPlans'])==1
   page.get_by_role('button',name='Повторить тренировку').click()
   expect(cards).to_have_count(3)
   expect(page.locator('.training-set')).to_have_count(0)
