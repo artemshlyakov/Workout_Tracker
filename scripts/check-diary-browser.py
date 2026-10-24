@@ -56,7 +56,7 @@ with sync_playwright() as p:
    else:
     page.get_by_label('Поиск упражнений').fill(name)
     page.locator('.library-item').first.click()
-    page.get_by_role('button',name='Выбрать упражнение').click()
+    page.get_by_role('button',name='Добавить в тренировку').click()
    expect(page.locator('.library-screen')).to_have_count(0)
   cards=page.locator('.multi-exercise-card'); expect(cards).to_have_count(3)
   for i in range(3):
