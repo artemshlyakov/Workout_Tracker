@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import type { JournalEntry, JournalView } from '../../data/ports/WorkoutRepository'
+import { localDay } from '../../domain/history'
+import { TrendChart, type TrendPoint } from './TrendChart'
+import { ProgressExercisePicker, type ProgressChoice } from './ProgressExercisePicker'
 
 const date = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
-const shortDate = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' })
 const number = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
 const dateLabel = (value: string) => date.format(new Date(value))
 const setCount = (workout: JournalEntry) => workout.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0)
@@ -52,19 +54,37 @@ export function ExercisesScreen({ journal }: { journal: JournalView }) {
 export function ProgressScreen({ journal }: { journal: JournalView }) {
   const [selected, setSelected] = useState('')
   const [period, setPeriod] = useState(0)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - period); cutoff.setHours(0, 0, 0, 0)
   const liveIds = new Set(journal.exercises.map((item) => item.id))
-  const choices = [...new Map([...journal.exercises, ...journal.workouts.flatMap((workout) => workout.exercises.map((exercise) => ({ id: exercise.id, name: exercise.name })))].map((item) => [item.id, item])).values()]
+  const completed = journal.workouts.filter((workout) => workout.completedAt && (!period || new Date(workout.startedAt) >= cutoff))
+  const loggedIds = new Set(completed.flatMap((workout) => workout.exercises.filter((exercise) => exercise.sets.length).map((exercise) => exercise.id)))
+  const choices: ProgressChoice[] = [...new Map([...journal.exercises, ...journal.workouts.flatMap((workout) => workout.exercises.map((exercise) => ({ id: exercise.id, name: exercise.name })))].map((item) => [item.id, item])).values()]
+    .map((item) => ({ ...item, archived: !liveIds.has(item.id), hasResults: loggedIds.has(item.id) }))
+    .sort((a, b) => Number(b.hasResults) - Number(a.hasResults) || a.name.localeCompare(b.name, 'ru'))
   const exerciseId = choices.some((item) => item.id === selected) ? selected : choices[0]?.id
-  const sessions = journal.workouts.filter((workout) => workout.completedAt && (!period || new Date(workout.startedAt) >= cutoff)).flatMap((workout) => workout.exercises.filter((item) => item.id === exerciseId && item.sets.length > 0).map((item) => ({ date: workout.startedAt, best: Math.max(...item.sets.map((set) => set.weight)), volume: item.sets.reduce((sum, set) => sum + set.weight * set.reps, 0) }))).sort((a, b) => a.date.localeCompare(b.date))
+  const selectedChoice = choices.find((item) => item.id === exerciseId)
+  const sessions = completed.flatMap((workout) => workout.exercises.filter((item) => item.id === exerciseId && item.sets.length > 0).map((item) => ({ date: workout.startedAt, best: Math.max(...item.sets.map((set) => set.weight)), volume: item.sets.reduce((sum, set) => sum + set.weight * set.reps, 0) }))).sort((a, b) => a.date.localeCompare(b.date))
+  const dailyVolume = new Map<string, number>()
+  for (const workout of completed) {
+    if (!setCount(workout)) continue
+    const day = localDay(workout.startedAt)
+    dailyVolume.set(day, (dailyVolume.get(day) ?? 0) + volume(workout))
+  }
+  const volumePoints: TrendPoint[] = [...dailyVolume].sort(([a], [b]) => a.localeCompare(b)).map(([day, value]) => ({ day, value }))
+  const dailyBest = new Map<string, number>()
+  for (const session of sessions) {
+    const day = localDay(session.date)
+    dailyBest.set(day, Math.max(dailyBest.get(day) ?? 0, session.best))
+  }
+  const weightPoints: TrendPoint[] = [...dailyBest].sort(([a], [b]) => a.localeCompare(b)).map(([day, value]) => ({ day, value }))
   const best = sessions.length ? Math.max(...sessions.map((session) => session.best)) : 0
   const total = sessions.reduce((sum, session) => sum + session.volume, 0)
-  return <section className="journal-screen"><p className="screen-eyebrow screen-eyebrow--blue">ТОЛЬКО ВАШИ ДАННЫЕ</p><h1>Прогресс</h1><p className="date-line">Результаты завершённых тренировок</p>
-    <label className="search-label" htmlFor="progress-exercise">Упражнение</label><select className="search-input" id="progress-exercise" value={exerciseId ?? ''} onChange={(event) => setSelected(event.target.value)}>{choices.map((item) => <option key={item.id} value={item.id}>{item.name}{liveIds.has(item.id) ? '' : ' · архив'}</option>)}</select>
+  return <section className="journal-screen progress-screen"><p className="screen-eyebrow screen-eyebrow--blue">ТОЛЬКО ВАШИ ДАННЫЕ</p><h1>Прогресс</h1><p className="date-line">Результаты завершённых тренировок</p>
     <div className="segmented" aria-label="Период прогресса">{[[30, "30 дней"], [90, "90 дней"], [0, "Всё время"]].map(([value, label]) => <button key={value} aria-pressed={period === value} onClick={() => setPeriod(Number(value))}>{label}</button>)}</div>
-    {sessions.length ? <><div className="metric-row"><div><span>Лучший вес</span><strong>{number.format(best)} кг</strong></div><div><span>Объём всего</span><strong>{number.format(total)} кг</strong></div></div>
-      <div className="journal-card"><h2>Рабочий вес</h2><p className="empty-note">{sessions.length} тренировок за период. Объём = вес × повторы; вес тела не учитывается.</p>{sessions.length < 2 ? <p className="empty-note">Ещё одна завершённая тренировка покажет изменение веса.</p> : <div className="progress-bars" aria-label="Лучший вес по последним 30 тренировкам">{sessions.slice(-30).map((session, index) => <div className="progress-bar" key={`${session.date}-${index}`}><span>{shortDate.format(new Date(session.date))}</span><div><i style={{ width: `${best === 0 ? 4 : Math.max(4, session.best / best * 100)}%` }} /></div><strong>{number.format(session.best)} кг</strong></div>)}</div>}</div>
-      <h2 className="screen-subtitle">Последние результаты</h2><div className="journal-list">{[...sessions].reverse().slice(0, 6).map((session, index) => <div className="result-item" key={`${session.date}-${index}`}><span>{dateLabel(session.date)}</span><strong>{number.format(session.best)} кг</strong></div>)}</div>
-    </> : <div className="empty-panel"><strong>Прогресс появится после тренировок</strong><p>Завершите тренировку с подходами, чтобы увидеть реальные результаты без примерных данных.</p></div>}
+    {volumePoints.length ? <section className="journal-card chart-card"><div className="chart-card__heading"><div><p className="screen-eyebrow screen-eyebrow--blue">ВСЕ ТРЕНИРОВКИ</p><h2>Объём по дням</h2></div><strong>{volumePoints.length} дн.</strong></div><TrendChart points={volumePoints} unit="кг" label="Общий объём тренировок" /><p className="chart-card__hint">Сумма веса × повторов всех подходов за день.</p></section> : <div className="empty-panel"><strong>График появится после первой тренировки</strong><p>Завершите тренировку с подходами, чтобы увидеть реальные данные.</p></div>}
+    {choices.length > 0 && <><h2 className="screen-subtitle">По упражнению</h2><button type="button" className="progress-exercise-trigger" aria-haspopup="dialog" aria-expanded={pickerOpen} onClick={() => setPickerOpen(true)}><span><small>Упражнение</small><strong>{selectedChoice?.name}{selectedChoice?.archived ? ' · архив' : ''}</strong></span><span aria-hidden="true">⌄</span></button>
+      {sessions.length ? <><div className="metric-row"><div><span>Лучший вес</span><strong>{number.format(best)} кг</strong></div><div><span>Объём за период</span><strong>{number.format(total)} кг</strong></div></div><section className="journal-card chart-card"><div className="chart-card__heading"><div><p className="screen-eyebrow screen-eyebrow--blue">РАБОЧИЙ ВЕС</p><h2>Лучший подход</h2></div><strong>{sessions.length} трен.</strong></div><TrendChart points={weightPoints} unit="кг" label={`Лучший вес: ${selectedChoice?.name ?? 'упражнение'}`} tone="action" /><p className="chart-card__hint">Максимальный вес в завершённой тренировке. За один день показан лучший результат.</p></section><h2 className="screen-subtitle">Последние результаты</h2><div className="journal-list">{[...sessions].reverse().slice(0, 6).map((session, index) => <div className="result-item" key={`${session.date}-${index}`}><span>{dateLabel(session.date)}</span><strong>{number.format(session.best)} кг</strong></div>)}</div></> : <div className="empty-panel"><strong>Пока нет результатов этого упражнения</strong><p>Выберите другое упражнение или завершите тренировку с подходами.</p></div>}</>}
+    {pickerOpen && <ProgressExercisePicker choices={choices} selectedId={exerciseId ?? ''} onSelect={(id) => { setSelected(id); setPickerOpen(false) }} onClose={() => setPickerOpen(false)} />}
   </section>
 }

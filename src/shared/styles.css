@@ -32,7 +32,7 @@
   --radius-control: 12px;
 }
 * { box-sizing: border-box; }
-html { min-width: 320px; }
+html { min-width: 320px; touch-action: pan-x pan-y; }
 body { min-width: 320px; margin: 0; }
 button, input { font: inherit; }
 button { cursor: pointer; }
@@ -154,12 +154,42 @@ h3 { margin: 0; font-size: 17px; }
 .screen-subtitle { margin: 12px 0 -5px; }
 .result-item { min-height: 54px; color: var(--text-secondary); }
 .result-item strong { color: var(--text-primary); }
-.progress-bars { display: grid; gap: 10px; margin-top: 16px; }
-.progress-bar { display: grid; grid-template-columns: 65px minmax(0, 1fr) 65px; gap: 8px; align-items: center; font-size: 11px; }
-.progress-bar > span { color: var(--text-secondary); overflow: hidden; white-space: nowrap; }
-.progress-bar > div { height: 10px; border-radius: 6px; background: var(--bg-elevated); }
-.progress-bar i { display: block; height: 100%; border-radius: inherit; background: var(--info); }
-.progress-bar strong { text-align: right; }
+.chart-card { margin-top: 14px; padding: 18px 16px 12px; overflow: hidden; }
+.chart-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.chart-card__heading h2 { margin: 5px 0 0; font-size: 18px; }
+.chart-card__heading > strong { flex: none; color: var(--info); font-size: 13px; }
+.chart-card__hint { margin: 4px 0 0 !important; font-size: 12px !important; }
+.trend-chart { margin: 12px 0 0; color: var(--info); }
+.trend-chart--action { color: var(--action-text); }
+.trend-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.trend-chart__grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 5; }
+.trend-chart__axis, .trend-chart__date { fill: var(--text-secondary); font-size: 11px; }
+.trend-chart__area { fill: currentColor; opacity: .1; }
+.trend-chart__line { fill: none; stroke: currentColor; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.trend-chart__point { fill: currentColor; stroke: var(--bg-surface); stroke-width: 2; }
+.trend-chart figcaption { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+.progress-exercise-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 58px; padding: 9px 14px; border: 1px solid var(--border-info); border-radius: 14px; background: var(--bg-surface); color: var(--text-primary); text-align: left; }
+.progress-exercise-trigger > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.progress-exercise-trigger small { color: var(--text-secondary); font-size: 11px; }
+.progress-exercise-trigger strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
+.progress-exercise-trigger > span:last-child { color: var(--info); font-size: 24px; }
+.progress-picker { position: fixed; inset: auto 0 0; width: min(100%, 520px); max-width: none; max-height: min(82dvh, 720px); margin: 0 auto; padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); border: 1px solid var(--border); border-bottom: 0; border-radius: 22px 22px 0 0; background: var(--bg-surface); color: var(--text-primary); box-shadow: 0 -24px 80px #0008; }
+.progress-picker::backdrop { background: #02080dcc; backdrop-filter: blur(4px); }
+.progress-picker[open] { animation: picker-rise .2s ease-out; }
+.progress-picker__handle { width: 40px; height: 4px; margin: 0 auto 14px; border-radius: 4px; background: var(--border); }
+.progress-picker__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.progress-picker__heading h2 { margin: 4px 0 0; font-size: 21px; }
+.progress-picker__heading button { flex: none; width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--bg-elevated); color: var(--text-primary); font-size: 25px; }
+.progress-picker__list { display: grid; gap: 7px; max-height: min(53dvh, 460px); margin-top: 14px; overflow-y: auto; overscroll-behavior: contain; }
+.progress-picker__item { display: flex; align-items: center; gap: 10px; min-height: 66px; padding: 8px; border: 1px solid var(--border); border-radius: 13px; background: var(--bg-elevated); color: var(--text-primary); text-align: left; }
+.progress-picker__item[aria-current=true] { border-color: var(--info); background: var(--bg-info); }
+.progress-picker__item .exercise-photo { width: 46px; height: 46px; flex-basis: 46px; }
+.progress-picker__item > span:not(.exercise-photo) { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.progress-picker__item strong { font-size: 14px; overflow-wrap: anywhere; }
+.progress-picker__item small { color: var(--text-secondary); font-size: 11px; }
+.progress-picker__item b { color: var(--info); font-size: 20px; }
+@keyframes picker-rise { from { transform: translateY(18px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .progress-picker[open] { animation: none; } }
 .finish-button { width: 100%; margin-top: 16px; border: 1px solid var(--border); }
 .finish-button:disabled { opacity: .45; cursor: not-allowed; }
 /* Multi-exercise workout: compact rows and reachable actions. */
@@ -240,8 +270,8 @@ summary { cursor: pointer; min-height: 44px; display: flex; align-items: center;
 .multi-exercise-card { position: relative; }
 .multi-exercise-card .exercise-card__heading { align-items: center; margin: 0; }
 .multi-exercise-card h2 { overflow-wrap: anywhere; }
-.exercise-photo { display: grid; place-items: center; width: 60px; height: 60px; flex: 0 0 60px; border-radius: 12px; background: #e7ecef; overflow: hidden; color: #354b22; }
-.exercise-photo img { display: block; width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; }
+.exercise-photo { display: grid; place-items: center; width: 60px; height: 60px; flex: 0 0 60px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elevated); overflow: hidden; color: var(--action-text); }
+.exercise-photo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .exercise-photo svg { width: 36px; height: 36px; }
 .exercise-options { margin-top: 6px; }
 .exercise-options summary { min-height: 44px; justify-content: flex-end; color: var(--text-secondary); font-size: 12px; }
@@ -266,8 +296,18 @@ summary { cursor: pointer; min-height: 44px; display: flex; align-items: center;
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--bg-surface); border-radius: 12px; }
 .segmented button { min-height: 44px; border: 0; border-radius: 9px; color: var(--text-secondary); background: transparent; font-weight: 700; }
 .segmented button[aria-pressed=true] { background: var(--action); color: var(--on-accent); }
+.progress-screen .segmented { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.progress-screen .segmented button { padding: 0 3px; font-size: 12px; }
 .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.filter-grid select { min-width: 0; font-size: 16px; }
+.filter-trigger { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; min-height: 52px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); color: var(--text-primary); text-align: left; }
+.filter-trigger > span { display: grid; gap: 2px; min-width: 0; }
+.filter-trigger small { color: var(--text-secondary); font-size: 10px; }
+.filter-trigger strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.filter-trigger b { color: var(--info); font-size: 18px; }
+.library-filter-picker__options { display: grid; gap: 7px; max-height: min(60dvh, 520px); overflow-y: auto; overscroll-behavior: contain; }
+.library-filter-picker__options button { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); color: var(--text-primary); text-align: left; }
+.library-filter-picker__options button[aria-pressed=true] { border-color: var(--info); background: var(--bg-info); }
+.library-filter-picker__options b { color: var(--info); font-size: 20px; }
 .library-item { display: flex; align-items: center; width: 100%; gap: 12px; min-height: 82px; padding: 10px; text-align: left; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-surface); color: var(--text-primary); }
 .library-item > span:not(.exercise-photo):not(.history-arrow) { display: grid; min-width: 0; gap: 5px; overflow-wrap: anywhere; }
 .library-item strong { font-size: 14px; line-height: 1.3; }
@@ -283,7 +323,7 @@ summary { cursor: pointer; min-height: 44px; display: flex; align-items: center;
 .dialog-heading .button { flex: none; font-size: 26px; }
 .exercise-dialog .date-line { font-size: 12px; text-transform: none; }
 .exercise-frames { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 16px 0; }
-.exercise-frames img { width: 100%; height: 150px; object-fit: contain; border-radius: 12px; background: #fff; }
+.exercise-frames img { width: 100%; aspect-ratio: 3 / 2; object-fit: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); }
 .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
 .tag-row span { padding: 6px 10px; background: var(--bg-elevated); border-radius: 20px; color: var(--text-secondary); font-size: 12px; }
 .exercise-instructions { padding-left: 22px; font-size: 14px; line-height: 1.6; color: var(--text-secondary); }

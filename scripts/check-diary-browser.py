@@ -5,7 +5,7 @@ No Supabase credentials, no assertions about real cloud Auth/sync.
 from pathlib import Path
 import atexit
 root = Path(__file__).resolve().parents[1]
-fixtures = {'preview-workout.html': '<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body><div id="root"></div><script type="module" src="/src/preview-workout.tsx"></script></body></html>\n', 'src/preview-workout.tsx': "import ReactDOM from 'react-dom/client'\nimport { App } from './app/App'\nimport { DexieWorkoutRepository } from './data/local/DexieWorkoutRepository'\nimport { WorkoutDatabase } from './data/local/schema'\nimport './shared/styles.css'\nconst repository = new DexieWorkoutRepository(new WorkoutDatabase('browser-release-check'), { ownerUserId: '11111111-1111-4111-8111-111111111111' })\nObject.assign(window, { repository })\nReactDOM.createRoot(document.getElementById('root')!).render(<App repository={repository} authenticated />)\n"}
+fixtures = {'preview-workout.html': '<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"></head><body><div id="root"></div><script type="module" src="/src/preview-workout.tsx"></script></body></html>\n', 'src/preview-workout.tsx': "import ReactDOM from 'react-dom/client'\nimport { App } from './app/App'\nimport { DexieWorkoutRepository } from './data/local/DexieWorkoutRepository'\nimport { WorkoutDatabase } from './data/local/schema'\nimport './shared/styles.css'\nconst repository = new DexieWorkoutRepository(new WorkoutDatabase('browser-release-check'), { ownerUserId: '11111111-1111-4111-8111-111111111111' })\nObject.assign(window, { repository })\nReactDOM.createRoot(document.getElementById('root')!).render(<App repository={repository} authenticated />)\n"}
 fixtures['src/preview-workout.tsx'] = fixtures['src/preview-workout.tsx'].replace(
     "ReactDOM.createRoot(document.getElementById('root')!).render(<App repository={repository} authenticated />)",
     """import { useState } from 'react'
@@ -102,6 +102,13 @@ with sync_playwright() as p:
   assert 'объёма' not in page.locator('.history-item--day').inner_text()
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'overflow calendar {width}'
   page.screenshot(path=f'/tmp/release-history-{width}.png',full_page=True)
+  page.get_by_role('button',name='Прогресс',exact=True).click()
+  expect(page.locator('.trend-chart')).to_have_count(2)
+  page.screenshot(path=f'/tmp/progress-clean-{width}.png',full_page=True)
+  page.locator('.progress-exercise-trigger').click()
+  page.screenshot(path=f'/tmp/progress-picker-clean-{width}.png')
+  page.get_by_role('button',name='Закрыть список упражнений').click()
+  page.get_by_role('button',name='История',exact=True).click()
   page.reload();page.locator('.history-item').first.click()
   expect(page.locator('.history-sets li')).to_have_count(6)
   backup=page.evaluate('window.repository.exportAccountData()')
@@ -120,6 +127,12 @@ with sync_playwright() as p:
   page.reload();expect(cards.nth(0).locator('input[inputmode=numeric]').last).to_have_value('12')
   page.get_by_role('button',name='Упражнения',exact=True).click()
   expect(page.locator('.library-item').first.locator('img')).to_be_visible()
+  page.locator('.filter-trigger').first.click()
+  expect(page.locator('.library-filter-picker')).to_be_visible()
+  page.locator('.library-filter-picker__options button').filter(has_text='Грудь').click()
+  expect(page.locator('.library-item').first).to_be_visible()
+  page.locator('.filter-trigger').first.click()
+  page.locator('.library-filter-picker__options button').filter(has_text='Все мышцы').click()
   page.wait_for_timeout(500)
   assert page.locator('.library-item').first.locator('img').evaluate('(img)=>img.naturalWidth>0')
   assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'overflow library {width}'
@@ -127,9 +140,11 @@ with sync_playwright() as p:
   page.get_by_role('button',name=re.compile(r'Мои \(')).click()
   page.get_by_role('button',name='Тренировка',exact=True).click()
   page.get_by_role('button',name='Завершить тренировку').click()
+  expect(page.locator('.calendar-card')).to_be_visible()
   page.get_by_role('button',name='Упражнения',exact=True).click()
   expect(page.locator('.library-screen')).to_be_visible()
-  page.get_by_role('button',name=re.compile(r'Мои \(')).click(timeout=3000)
+  expect(page.locator('.library-screen .segmented button')).to_have_count(2)
+  page.locator('.library-screen .segmented button').nth(1).click()
   page.on('dialog', lambda dialog: dialog.accept())
   page.get_by_role('button',name='Убрать Моё упражнение из моих упражнений').click()
   expect(page.get_by_role('button',name='Убрать Моё упражнение из моих упражнений')).to_have_count(0)
@@ -138,7 +153,22 @@ with sync_playwright() as p:
   assert 'Моё упражнение' in page.locator('.journal-screen').inner_text()
   expect(page.get_by_role('button',name='Исправить запись')).to_be_disabled()
   page.get_by_role('button',name='Прогресс',exact=True).click()
-  expect(page.locator('#progress-exercise option').filter(has_text='Моё упражнение · архив')).to_have_count(1)
+  expect(page.locator('.trend-chart')).to_have_count(2)
+  page.screenshot(path=f'/tmp/release-progress-{width}.png',full_page=True)
+  page.locator('.progress-exercise-trigger').click()
+  expect(page.locator('.progress-picker')).to_be_visible()
+  expect(page.locator('.progress-picker__item')).to_have_count(3)
+  page.screenshot(path=f'/tmp/release-progress-picker-{width}.png')
+  page.locator('.progress-picker__item').filter(has_text='Жим штанги лёжа').click()
+  expect(page.locator('.progress-exercise-trigger')).to_contain_text('Жим штанги лёжа')
+  page.locator('.progress-exercise-trigger').click()
+  page.get_by_label('Поиск в списке упражнений').fill('Моё упражнение')
+  expect(page.locator('.progress-picker__item').filter(has_text='В архиве')).to_have_count(1)
+  page.get_by_role('button',name='Закрыть список упражнений').click()
+  page.get_by_label('Включить светлую тему').click()
+  page.wait_for_timeout(300)
+  page.screenshot(path=f'/tmp/release-progress-light-{width}.png',full_page=True)
+  assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'overflow progress {width}'
 
   assert not errors,errors
   print(width,'PASS: 3 exercises, 6 sets, draft reload, completion/history, repeat, offline write, archive/history/progress, both themes/profile, images, no overflow/errors')
